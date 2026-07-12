@@ -1,100 +1,208 @@
-from flask import Flask, jsonify, request
-from flask_cors import CORS
+import os
 import sqlite3
+from flask import Flask, request, jsonify
+from werkzeug.security import generate_password_hash, check_password_hash
 
 app = Flask(__name__)
-CORS(app)
-
+app.config['SECRET_KEY'] = 'tu_clave_secreta_para_tokens_aqui'
 DATABASE = 'trendvibe.db'
 
-def conectar_db():
-    """Establece conexión con la base de datos y retorna filas tipo diccionario."""
-    conexion = sqlite3.connect(DATABASE)
-    conexion.row_factory = sqlite3.Row
-    return conexion
+def get_db_connection():
+    """Establece conexión con la base de datos SQLite."""
+    conn = sqlite3.connect(DATABASE)
+    conn.row_factory = sqlite3.Row  # Permite acceder a las columnas por nombre como un diccionario
+    return conn
 
-def inicializar_db():
-    """Crea las tablas en 3FN e inserta datos iniciales si la DB está vacía."""
-    with conectar_db() as conexion:
-        # 1. Crear tabla de Categorías
-        conexion.execute('''
-            CREATE TABLE IF NOT EXISTS categorias (
-                id INTEGER PRIMARY KEY AUTOINCREMENT,
-                nombre TEXT NOT NULL UNIQUE
-            )
-        ''')
-        
-        # 2. Crear tabla de Productos (Garantizando Integridad Referencial)
-        conexion.execute('''
-            CREATE TABLE IF NOT EXISTS productos (
-                id INTEGER PRIMARY KEY AUTOINCREMENT,
-                nombre TEXT NOT NULL,
-                precio REAL NOT NULL,
-                categoria_id INTEGER,
-                FOREIGN KEY (categoria_id) REFERENCES categorias(id)
-            )
-        ''')
-        
-        # Insertar categorías base para ropa urbana si no existen
-        cursor = conexion.cursor()
-        cursor.execute("SELECT COUNT(*) FROM categorias")
-        if cursor.fetchone()[0] == 0:
-            cursor.execute("INSERT INTO categorias (nombre) VALUES ('Streetwear')")
-            cursor.execute("INSERT INTO categorias (nombre) VALUES ('Hoodies')")
-            cursor.execute("INSERT INTO categorias (nombre) VALUES ('Pantalones')")
-            
-            # Insertar productos relacionados dinámicamente mediante subconsultas SQL
-            cursor.execute("INSERT INTO productos (nombre, precio, categoria_id) VALUES ('Chaqueta Denim Oversize', 45.00, (SELECT id FROM categorias WHERE nombre='Streetwear'))")
-            cursor.execute("INSERT INTO productos (nombre, precio, categoria_id) VALUES ('Sudadera Hoodie Black', 35.50, (SELECT id FROM categorias WHERE nombre='Hoodies'))")
-            cursor.execute("INSERT INTO productos (nombre, precio, categoria_id) VALUES ('Pantalón Cargo Camuflado', 40.00, (SELECT id FROM categorias WHERE nombre='Pantalones'))")
-            conexion.commit()
+def init_db():
+    """Crea las tablas bajo la 3ra Forma Normal (3FN) si no existen."""
+    conn = get_db_connection()
+    cursor = conn.cursor()
+    
+    # Activar el soporte de llaves foráneas en SQLite
+    cursor.execute("PRAGMA foreign_keys = ON;")
+    
+    # Tabla de Usuarios
+    cursor.execute('''
+        CREATE TABLE IF NOT EXISTS usuarios (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            nombre_usuario TEXT UNIQUE NOT NULL,
+            correo TEXT UNIQUE NOT NULL,
+            contrasena TEXT NOT NULL,
+            fecha_registro TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+        )
+    ''')
+    
+    # Tabla de Publicaciones / Contenido (Relación 1 a Muchos con Usuarios)
+    cursor.execute('''
+        CREATE TABLE IF NOT EXISTS publicaciones (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            usuario_id INTEGER NOT NULL,
+            titulo TEXT NOT NULL,
+            contenido TEXT NOT NULL,
+            fecha_creacion TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+            FOREIGN KEY (usuario_id) REFERENCES usuarios (id) ON DELETE CASCADE
+        )
+    ''')
+    
+    conn.commit()
+    conn.close()
 
-# Inicializamos la base de datos relacional al arrancar el script
-inicializar_db()
+# Inicializar la base de datos al arrancar el servidor
+init_db()
 
-# ==================== ENDPOINTS DE LA API (CRUD) ====================
+# ==========================================
+#               ENDPOINTS API
+# ==========================================
 
 @app.route('/')
 def index():
-    return "<h1>TrendVibe API Backend</h1><p>Servidor con persistencia en Base de Datos Relacional Operativa.</p>"
+    return jsonify({"proyecto": "TrendVibe API", "estado": "Operativo"})
 
-# READ: Obtener todos los productos combinando tablas (INNER JOIN)
-@app.route('/api/productos', methods=['GET'])
-def obtener_productos():
+# 1. Registro de Usuarios (Seguridad de la información)
+@app.route('/api/auth/register', methods=['POST'])
+def register():
+    data = request.get_json()
+    if not data or 'nombre_usuario' not in data or 'correo' not in data or 'contrasena' not in data:
+        return jsonify({"error": "Faltan campos obligatorios"}), 400
+    
+    hashed_password = generate_password_hash(data['contrasena'], method='pbkdf2:sha256')
+    
+    conn = get_db_connection()
+    cursor = conn.cursor()
     try:
-        with conectar_db() as conexion:
-            cursor = conexion.cursor()
-            # Consulta relacional para traer el nombre de la categoría real
-            cursor.execute('''
-                SELECT p.id, p.nombre, p.precio, c.nombre AS categoria 
-                FROM productos p
-                INNER JOIN categorias c ON p.categoria_id = c.id
-            ''')
-            filas = cursor.fetchall()
-            
-            # Convertimos el resultado de la DB a una lista de diccionarios JSON
-            productos_db = [dict(fila) for fila in filas]
-            return jsonify(productos_db), 200
-    except Exception as e:
-        return jsonify({"error": str(e)}), 500
+        cursor.execute(
+            'INSERT INTO usuarios (nombre_usuario, correo, contrasena) VALUES (?, ?, ?)',
+            (data['nombre_usuario'], data['correo'], hashed_password)
+        )
+        conn.commit()
+        return jsonify({"mensaje": "Usuario registrado exitosamente"}), 201
+    except sqlite3.IntegrityError:
+        return jsonify({"error": "El usuario o correo ya se encuentra registrado"}), 400
+    finally:
+        conn.close()
 
-# CREATE: Endpoint para añadir un producto desde la App móvil
-@app.route('/api/productos', methods=['POST'])
-def crear_producto():
-    datos = request.get_json()
-    nombre = datos.get('nombre')
-    precio = datos.get('precio')
-    categoria_id = datos.get('categoria_id') # Id de la categoría seleccionada
+# 2. Inicio de Sesión (Autenticación requerida)
+@app.route('/api/auth/login', methods=['POST'])
+def login():
+    data = request.get_json()
+    if not data or 'correo' not in data or 'contrasena' not in data:
+        return jsonify({"error": "Faltan credenciales"}), 400
+    
+    conn = get_db_connection()
+    cursor = conn.cursor()
+    usuario = cursor.execute('SELECT * FROM usuarios WHERE correo = ?', (data['correo'],)).fetchone()
+    conn.close()
+    
+    if usuario and check_password_hash(usuario['contrasena'], data['contrasena']):
+        return jsonify({
+            "mensaje": "Inicio de sesión exitoso",
+            "usuario": {
+                "id": usuario['id'],
+                "nombre_usuario": usuario['nombre_usuario'],
+                "correo": usuario['correo']
+            }
+        }), 200
+        
+    return jsonify({"error": "Credenciales incorrectas"}), 401
 
-    if not nombre or not precio or not categoria_id:
-        return jsonify({"message": "Faltan datos obligatorios"}), 400
 
-    with conectar_db() as conexion:
-        cursor = conexion.cursor()
-        cursor.execute("INSERT INTO productos (nombre, precio, categoria_id) VALUES (?, ?, ?)", 
-                       (nombre, precio, categoria_id))
-        conexion.commit()
-        return jsonify({"message": "Producto guardado con éxito en la base de datos"}), 201
+# ==========================================
+#          CRUD DE PUBLICACIONES (CON PAGINACIÓN)
+# ==========================================
+
+# C-R-U-D: CREAR (POST)
+@app.route('/api/publicaciones', methods=['POST'])
+def crear_publicacion():
+    data = request.get_json()
+    if not data or 'usuario_id' not in data or 'titulo' not in data or 'contenido' not in data:
+        return jsonify({"error": "Campos obligatorios faltantes"}), 400
+        
+    conn = get_db_connection()
+    cursor = conn.cursor()
+    try:
+        cursor.execute(
+            'INSERT INTO publicaciones (usuario_id, titulo, contenido) VALUES (?, ?, ?)',
+            (data['usuario_id'], data['titulo'], data['contenido'])
+        )
+        conn.commit()
+        return jsonify({"mensaje": "Publicación creada con éxito"}), 201
+    except sqlite3.IntegrityError:
+        return jsonify({"error": "Error de integridad. Verifique el usuario_id"}), 400
+    finally:
+        conn.close()
+
+# C-R-U-D: LEER TODAS CON PAGINACIÓN (GET) -> Requerimiento de Optimización Obligatorio
+@app.route('/api/publicaciones', methods=['GET'])
+def obtener_publicaciones():
+    # Optimización: Paginación mediante parámetros de URL (?page=1&per_page=5)
+    pagina = request.args.get('page', 1, type=int)
+    por_pagina = request.args.get('per_page', 5, type=int)
+    offset = (pagina - 1) * por_pagina
+    
+    conn = get_db_connection()
+    # Consulta SQL relacional estructurada utilizando un JOIN
+    query = '''
+        SELECT p.id, p.titulo, p.contenido, p.fecha_creacion, u.nombre_usuario 
+        FROM publicaciones p
+        JOIN usuarios u ON p.usuario_id = u.id
+        ORDER BY p.fecha_creacion DESC
+        LIMIT ? OFFSET ?
+    '''
+    publicaciones = conn.execute(query, (por_pagina, offset)).fetchall()
+    conn.close()
+    
+    resultado = []
+    for pub in publicaciones:
+        resultado.append({
+            "id": pub['id'],
+            "titulo": pub['titulo'],
+            "contenido": pub['contenido'],
+            "fecha_creacion": pub['fecha_creacion'],
+            "autor": pub['nombre_usuario']
+        })
+        
+    return jsonify({
+        "pagina": pagina,
+        "por_pagina": por_pagina,
+        "datos": resultado
+    }), 200
+
+# C-R-U-D: ACTUALIZAR (PUT)
+@app.route('/api/publicaciones/<int:id>', methods=['PUT'])
+def actualizar_publicacion(id):
+    data = request.get_json()
+    if not data or 'titulo' not in data or 'contenido' not in data:
+        return jsonify({"error": "Campos faltantes"}), 400
+        
+    conn = get_db_connection()
+    cursor = conn.cursor()
+    cursor.execute(
+        'UPDATE publicaciones SET titulo = ?, contenido = ? WHERE id = ?',
+        (data['titulo'], data['contenido'], id)
+    )
+    conn.commit()
+    filas_afectadas = cursor.rowcount
+    conn.close()
+    
+    if filas_afectadas == 0:
+        return jsonify({"error": "Publicación no encontrada"}), 404
+        
+    return jsonify({"mensaje": "Publicación actualizada con éxito"}), 200
+
+# C-R-U-D: ELIMINAR (DELETE)
+@app.route('/api/publicaciones/<int:id>', methods=['DELETE'])
+def eliminar_publicacion(id):
+    conn = get_db_connection()
+    cursor = conn.cursor()
+    cursor.execute('DELETE FROM publicaciones WHERE id = ?', (id,))
+    conn.commit()
+    filas_afectadas = cursor.rowcount
+    conn.close()
+    
+    if filas_afectadas == 0:
+        return jsonify({"error": "Publicación no encontrada"}), 404
+        
+    return jsonify({"mensaje": "Publicación eliminada con éxito"}), 200
 
 if __name__ == '__main__':
     app.run(debug=True, port=5000)
