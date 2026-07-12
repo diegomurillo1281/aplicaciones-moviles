@@ -46,5 +46,11 @@ app.*.map.json
 # Sensitive data / Environment variables
 .env
 *.env
-android/key.properties
-ios/Flutter/Release.xcconfig
+**/android/key.properties
+**/ios/Flutter/Release.xcconfig
+**/android/app/debug
+**/android/app/profile
+**/android/app/release
+# Database
+trendvibe.db
+*.db
