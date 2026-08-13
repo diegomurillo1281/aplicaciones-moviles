@@ -1,9 +1,20 @@
+from flask_caching import Cache
 import sqlite3
 from flask import Flask, request, jsonify
 from flask_cors import CORS
+from flasgger import Swagger
 from werkzeug.security import generate_password_hash, check_password_hash
 
 app = Flask(__name__)
+
+swagger = Swagger(app)
+
+cache = Cache(
+    app,
+    config={
+        "CACHE_TYPE": "simple"
+    }
+)
 
 # Permite que Flutter Web pueda consumir la API
 CORS(app)
@@ -49,9 +60,19 @@ def init_db():
     )
     """)
 
+    # Índices de optimización
+    cursor.execute("""
+    CREATE INDEX IF NOT EXISTS idx_publicaciones_usuario
+    ON publicaciones(usuario_id)
+    """)
+
+    cursor.execute("""
+    CREATE INDEX IF NOT EXISTS idx_publicaciones_fecha
+    ON publicaciones(fecha_creacion)
+    """)
+
     conn.commit()
     conn.close()
-
 
 init_db()
 
@@ -69,9 +90,35 @@ def home():
 # ==========================
 # REGISTRO
 # ==========================
-
 @app.route("/api/auth/register", methods=["POST"])
 def register():
+    """
+    Registro de usuario
+
+    ---
+    tags:
+      - Autenticación
+
+    parameters:
+      - in: body
+        name: body
+        required: true
+        schema:
+          type: object
+          properties:
+            nombre_usuario:
+              type: string
+            correo:
+              type: string
+            contrasena:
+              type: string
+
+    responses:
+      201:
+        description: Usuario registrado correctamente
+      400:
+        description: Error de validación
+    """
 
     data = request.get_json()
 
@@ -119,7 +166,37 @@ def register():
 
 @app.route("/api/auth/login", methods=["POST"])
 def login():
+    """
+    Inicio de sesión
 
+    ---
+    tags:
+      - Autenticación
+
+    parameters:
+      - in: body
+        name: body
+        required: true
+
+        schema:
+          type: object
+
+          properties:
+
+            correo:
+              type: string
+
+            contrasena:
+              type: string
+
+    responses:
+
+      200:
+        description: Inicio de sesión exitoso
+
+      401:
+        description: Credenciales incorrectas
+    """
     data = request.get_json()
 
     if not data:
@@ -192,6 +269,8 @@ def crear_publicacion():
 
     conn.close()
 
+    cache.clear()
+
     return jsonify({
         "mensaje": "Publicación creada correctamente"
     }), 201
@@ -201,8 +280,29 @@ def crear_publicacion():
 # LISTAR PUBLICACIONES
 # ==========================
 
+@cache.cached(timeout=30)
 @app.route("/api/publicaciones", methods=["GET"])
 def listar_publicaciones():
+    """
+    Obtener publicaciones
+
+    ---
+    tags:
+      - Publicaciones
+
+    parameters:
+      - name: page
+        in: query
+        type: integer
+
+      - name: per_page
+        in: query
+        type: integer
+
+    responses:
+      200:
+        description: Lista de publicaciones
+    """
 
     pagina = request.args.get("page", 1, type=int)
     por_pagina = request.args.get("per_page", 5, type=int)
@@ -211,53 +311,46 @@ def listar_publicaciones():
 
     conn = get_db_connection()
 
-    publicaciones = conn.execute("""
+    publicaciones = conn.execute(
+        """
+        SELECT
+            publicaciones.id,
+            publicaciones.titulo,
+            publicaciones.contenido,
+            publicaciones.fecha_creacion,
+            usuarios.nombre_usuario
 
-    SELECT
-        publicaciones.id,
-        publicaciones.titulo,
-        publicaciones.contenido,
-        publicaciones.fecha_creacion,
-        usuarios.nombre_usuario
+        FROM publicaciones
 
-    FROM publicaciones
+        INNER JOIN usuarios
+        ON publicaciones.usuario_id = usuarios.id
 
-    INNER JOIN usuarios
+        ORDER BY publicaciones.id DESC
 
-    ON publicaciones.usuario_id=usuarios.id
-
-    ORDER BY publicaciones.id DESC
-
-    LIMIT ?
-
-    OFFSET ?
-
-    """, (por_pagina, offset)).fetchall()
+        LIMIT ?
+        OFFSET ?
+        """,
+        (por_pagina, offset)
+    ).fetchall()
 
     conn.close()
 
     datos = []
 
     for p in publicaciones:
-
         datos.append({
-
             "id": p["id"],
             "titulo": p["titulo"],
             "contenido": p["contenido"],
             "autor": p["nombre_usuario"],
             "fecha": p["fecha_creacion"]
-
         })
 
     return jsonify({
-
         "pagina": pagina,
         "por_pagina": por_pagina,
         "datos": datos
-
     })
-
 
 # ==========================
 # ACTUALIZAR
@@ -272,23 +365,20 @@ def actualizar_publicacion(id):
     contenido = data.get("contenido")
 
     conn = get_db_connection()
-
     cursor = conn.cursor()
 
-    cursor.execute("""
-
-    UPDATE publicaciones
-
-    SET titulo=?,contenido=?
-
-    WHERE id=?
-
-    """, (titulo, contenido, id))
+    cursor.execute(
+        """
+        UPDATE publicaciones
+        SET titulo=?, contenido=?
+        WHERE id=?
+        """,
+        (titulo, contenido, id)
+    )
 
     conn.commit()
 
     if cursor.rowcount == 0:
-
         conn.close()
 
         return jsonify({
@@ -297,10 +387,11 @@ def actualizar_publicacion(id):
 
     conn.close()
 
+    cache.clear()
+
     return jsonify({
         "mensaje": "Publicación actualizada correctamente"
     })
-
 
 # ==========================
 # ELIMINAR
@@ -328,7 +419,9 @@ def eliminar_publicacion(id):
             "error": "Publicación no encontrada"
         }), 404
 
-    conn.close()
+        conn.close()
+
+    cache.clear()
 
     return jsonify({
         "mensaje": "Publicación eliminada correctamente"
