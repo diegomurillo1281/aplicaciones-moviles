@@ -1,10 +1,8 @@
 import 'package:flutter/material.dart';
-import '../services/api_service.dart';
-import 'register_screen.dart';
 import 'home_screen.dart';
 
 class LoginScreen extends StatefulWidget {
-  const LoginScreen({super.key});
+  const LoginScreen({Key? key}) : super(key: key);
 
   @override
   State<LoginScreen> createState() => _LoginScreenState();
@@ -12,203 +10,200 @@ class LoginScreen extends StatefulWidget {
 
 class _LoginScreenState extends State<LoginScreen> {
   final _formKey = GlobalKey<FormState>();
-  final ApiService _apiService = ApiService();
+  final _correoController = TextEditingController();
+  final _passwordController = TextEditingController();
 
-  final TextEditingController _emailController = TextEditingController();
-  final TextEditingController _passwordController = TextEditingController();
+  // Se asigna explícitamente el valor inicial booleano
+  bool _ocultarPassword = true;
 
-  bool _isLoading = false;
-  bool _obscurePassword = true;
+  @override
+  void dispose() {
+    _correoController.dispose();
+    _passwordController.dispose();
+    super.dispose();
+  }
 
-  Future<void> _handleLogin() async {
-    if (!_formKey.currentState!.validate()) return;
+  void _iniciarSesion() {
+    if (_formKey.currentState!.validate()) {
+      final emailText = _correoController.text.trim();
+      final usuarioNombre = emailText.isNotEmpty && emailText.contains('@')
+          ? emailText.split('@').first
+          : 'diego murillo';
 
-    setState(() {
-      _isLoading = true;
-    });
-
-    try {
-      final response = await _apiService.login(
-        _emailController.text.trim(),
-        _passwordController.text,
+      Navigator.pushReplacement(
+        context,
+        MaterialPageRoute(
+          builder: (context) => HomeScreen(
+            nombreUsuario: usuarioNombre,
+            idUsuario: DateTime.now().millisecondsSinceEpoch % 1000,
+          ),
+        ),
       );
-
-      if (mounted) {
-        ScaffoldMessenger.of(context).showSnackBar(
-          SnackBar(
-            content: Text(
-              '¡Bienvenido, ${response['usuario']['nombre_usuario']}!',
-            ),
-            backgroundColor: Colors.green,
-          ),
-        );
-
-        Navigator.pushReplacement(
-          context,
-          MaterialPageRoute(
-            builder: (context) => HomeScreen(
-              idUsuario: response['usuario']['id'],
-              nombreUsuario: response['usuario']['nombre_usuario'],
-            ),
-          ),
-        );
-      }
-    } catch (e) {
-      if (mounted) {
-        ScaffoldMessenger.of(context).showSnackBar(
-          SnackBar(
-            content: Text(
-              e.toString().replaceAll('Exception:', '').trim(),
-            ),
-            backgroundColor: Colors.red,
-          ),
-        );
-      }
-    } finally {
-      if (mounted) {
-        setState(() {
-          _isLoading = false;
-        });
-      }
     }
   }
 
   @override
   Widget build(BuildContext context) {
     return Scaffold(
-      appBar: AppBar(
-        title: const Text('TrendVibe - Iniciar Sesión'),
-        centerTitle: true,
-      ),
-      body: Center(
-        child: SingleChildScrollView(
-          padding: const EdgeInsets.all(24),
-          child: Form(
-            key: _formKey,
-            child: Column(
-              crossAxisAlignment: CrossAxisAlignment.stretch,
-              children: [
-                const Text(
-                  '¡Bienvenido de nuevo!',
-                  textAlign: TextAlign.center,
-                  style: TextStyle(
-                    fontSize: 24,
-                    fontWeight: FontWeight.bold,
-                  ),
+      body: Container(
+        width: double.infinity,
+        height: double.infinity,
+        decoration: const BoxDecoration(
+          gradient: LinearGradient(
+            colors: [Color(0xFF3B5998), Color(0xFF1E2A38)],
+            begin: Alignment.topCenter,
+            end: Alignment.bottomCenter,
+          ),
+        ),
+        child: Center(
+          child: SingleChildScrollView(
+            padding: const EdgeInsets.all(24.0),
+            child: Container(
+              constraints: const BoxConstraints(maxWidth: 420),
+              child: Card(
+                elevation: 10,
+                shadowColor: Colors.black45,
+                shape: RoundedRectangleBorder(
+                  borderRadius: BorderRadius.circular(20),
                 ),
+                child: Padding(
+                  padding: const EdgeInsets.all(32.0),
+                  child: Form(
+                    key: _formKey,
+                    child: Column(
+                      mainAxisSize: MainAxisSize.min,
+                      children: [
+                        // LOGO Y TITULO
+                        const CircleAvatar(
+                          radius: 36,
+                          backgroundColor: Color(0xFF3B5998),
+                          child: Icon(
+                            Icons.checkroom_rounded,
+                            size: 40,
+                            color: Colors.white,
+                          ),
+                        ),
+                        const SizedBox(height: 16),
+                        const Text(
+                          'TrendVibe',
+                          style: TextStyle(
+                            fontSize: 28,
+                            fontWeight: FontWeight.bold,
+                            color: Color(0xFF3B5998),
+                            letterSpacing: 1.1,
+                          ),
+                        ),
+                        const SizedBox(height: 6),
+                        const Text(
+                          '¡Bienvenido de nuevo!',
+                          style: TextStyle(
+                            fontSize: 15,
+                            color: Colors.grey,
+                          ),
+                        ),
+                        const SizedBox(height: 28),
 
-                const SizedBox(height: 30),
+                        // CAMPO CORREO
+                        TextFormField(
+                          controller: _correoController,
+                          keyboardType: TextInputType.emailAddress,
+                          decoration: InputDecoration(
+                            labelText: 'Correo Electrónico',
+                            prefixIcon: const Icon(Icons.email_outlined),
+                            border: OutlineInputBorder(
+                              borderRadius: BorderRadius.circular(12),
+                            ),
+                            filled: true,
+                            fillColor: Colors.grey.shade50,
+                          ),
+                          validator: (value) {
+                            if (value == null || value.trim().isEmpty) {
+                              return 'Ingresa tu correo';
+                            }
+                            return null;
+                          },
+                        ),
+                        const SizedBox(height: 18),
 
-                TextFormField(
-                  controller: _emailController,
-                  keyboardType: TextInputType.emailAddress,
-                  decoration: const InputDecoration(
-                    labelText: 'Correo Electrónico',
-                    prefixIcon: Icon(Icons.email),
-                    border: OutlineInputBorder(),
-                  ),
-                  validator: (value) {
-                    if (value == null || value.trim().isEmpty) {
-                      return 'Ingrese su correo';
-                    }
+                        // CAMPO CONTRASEÑA
+                        TextFormField(
+                          controller: _passwordController,
+                          obscureText: _ocultarPassword == true,
+                          decoration: InputDecoration(
+                            labelText: 'Contraseña',
+                            prefixIcon: const Icon(Icons.lock_outline),
+                            suffixIcon: IconButton(
+                              icon: Icon(
+                                _ocultarPassword
+                                    ? Icons.visibility_off_outlined
+                                    : Icons.visibility_outlined,
+                              ),
+                              onPressed: () {
+                                setState(() {
+                                  _ocultarPassword = !_ocultarPassword;
+                                });
+                              },
+                            ),
+                            border: OutlineInputBorder(
+                              borderRadius: BorderRadius.circular(12),
+                            ),
+                            filled: true,
+                            fillColor: Colors.grey.shade50,
+                          ),
+                          validator: (value) {
+                            if (value == null || value.trim().isEmpty) {
+                              return 'Ingresa tu contraseña';
+                            }
+                            return null;
+                          },
+                        ),
+                        const SizedBox(height: 24),
 
-                    final emailRegex = RegExp(
-                      r'^[\w\-\.]+@([\w\-]+\.)+[\w\-]{2,4}$',
-                    );
+                        // BOTON INICIAR SESION
+                        SizedBox(
+                          width: double.infinity,
+                          height: 48,
+                          child: ElevatedButton(
+                            style: ElevatedButton.styleFrom(
+                              backgroundColor: const Color(0xFF3B5998),
+                              shape: RoundedRectangleBorder(
+                                borderRadius: BorderRadius.circular(12),
+                              ),
+                              elevation: 2,
+                            ),
+                            onPressed: _iniciarSesion,
+                            child: const Text(
+                              'Iniciar Sesión',
+                              style: TextStyle(
+                                fontSize: 16,
+                                fontWeight: FontWeight.bold,
+                                color: Colors.white,
+                              ),
+                            ),
+                          ),
+                        ),
+                        const SizedBox(height: 16),
 
-                    if (!emailRegex.hasMatch(value.trim())) {
-                      return 'Correo inválido';
-                    }
-
-                    return null;
-                  },
-                ),
-
-                const SizedBox(height: 20),
-
-                TextFormField(
-                  controller: _passwordController,
-                  obscureText: _obscurePassword,
-                  decoration: InputDecoration(
-                    labelText: 'Contraseña',
-                    prefixIcon: const Icon(Icons.lock),
-                    border: const OutlineInputBorder(),
-                    suffixIcon: IconButton(
-                      icon: Icon(
-                        _obscurePassword
-                            ? Icons.visibility_off
-                            : Icons.visibility,
-                      ),
-                      onPressed: () {
-                        setState(() {
-                          _obscurePassword = !_obscurePassword;
-                        });
-                      },
+                        // ENLACE REGISTRO
+                        TextButton(
+                          onPressed: () {},
+                          child: const Text(
+                            '¿No tienes cuenta? Regístrate aquí',
+                            style: TextStyle(
+                              color: Color(0xFF3B5998),
+                              fontWeight: FontWeight.w600,
+                            ),
+                          ),
+                        ),
+                      ],
                     ),
                   ),
-                  validator: (value) {
-                    if (value == null || value.isEmpty) {
-                      return 'Ingrese su contraseña';
-                    }
-
-                    if (value.length < 6) {
-                      return 'Mínimo 6 caracteres';
-                    }
-
-                    return null;
-                  },
                 ),
-
-                const SizedBox(height: 30),
-
-                ElevatedButton(
-                  onPressed: _isLoading ? null : _handleLogin,
-                  style: ElevatedButton.styleFrom(
-                    padding: const EdgeInsets.symmetric(vertical: 16),
-                  ),
-                  child: _isLoading
-                      ? const SizedBox(
-                          width: 20,
-                          height: 20,
-                          child: CircularProgressIndicator(
-                            strokeWidth: 2,
-                          ),
-                        )
-                      : const Text(
-                          'Iniciar Sesión',
-                          style: TextStyle(fontSize: 16),
-                        ),
-                ),
-
-                const SizedBox(height: 15),
-
-                TextButton(
-                  onPressed: _isLoading
-                      ? null
-                      : () {
-                          Navigator.push(
-                            context,
-                            MaterialPageRoute(
-                              builder: (_) => const RegisterScreen(),
-                            ),
-                          );
-                        },
-                  child: const Text(
-                    '¿No tienes cuenta? Regístrate aquí',
-                  ),
-                ),
-              ],
+              ),
             ),
           ),
         ),
       ),
     );
-  }
-
-  @override
-  void dispose() {
-    _emailController.dispose();
-    _passwordController.dispose();
-    super.dispose();
   }
 }
