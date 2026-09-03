@@ -12,7 +12,7 @@ swagger = Swagger(app)
 cache = Cache(
     app,
     config={
-        "CACHE_TYPE": "simple"
+       "CACHE_TYPE": "SimpleCache"
     }
 )
 
