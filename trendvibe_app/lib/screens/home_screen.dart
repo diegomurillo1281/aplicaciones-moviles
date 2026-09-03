@@ -1,314 +1,267 @@
+import 'dart:async';
 import 'package:flutter/material.dart';
-import '../models/prenda_model.dart';
-import 'detalle_prenda_screen.dart';
-import 'crear_publicacion_screen.dart';
+import 'package:connectivity_plus/connectivity_plus.dart';
+import 'package:uuid/uuid.dart';
+import '../services/database_service.dart';
+import '../services/secure_storage_service.dart';
+import '../services/sync_service.dart';
 
-class HomeScreen extends StatelessWidget {
+class HomeScreen extends StatefulWidget {
   final String nombreUsuario;
-  final int idUsuario;
+  final String idUsuario;
 
   const HomeScreen({
-    Key? key,
-    this.nombreUsuario = "diego murillo",
-    this.idUsuario = 5,
+    Key? key, 
+    required this.nombreUsuario, 
+    required this.idUsuario
   }) : super(key: key);
 
   @override
-  Widget build(BuildContext context) {
-    return Scaffold(
-      backgroundColor: const Color(0xFFF4F6F9),
-      appBar: AppBar(
-        elevation: 0,
-        backgroundColor: const Color(0xFF3B5998),
-        title: const Text(
-          'TrendVibe',
-          style: TextStyle(fontWeight: FontWeight.bold, fontSize: 22, color: Colors.white),
-        ),
-        actions: [
-          IconButton(
-            icon: const Icon(Icons.notifications_none_rounded, color: Colors.white),
-            onPressed: () {},
-          ),
-          Padding(
-            padding: const EdgeInsets.only(right: 12.0),
-            child: CircleAvatar(
-              backgroundColor: Colors.white24,
-              child: Text(
-                nombreUsuario.isNotEmpty ? nombreUsuario[0].toUpperCase() : 'U',
-                style: const TextStyle(color: Colors.white, fontWeight: FontWeight.bold),
-              ),
-            ),
-          ),
-        ],
+  State<HomeScreen> createState() => _HomeScreenState();
+}
+
+class _HomeScreenState extends State<HomeScreen> {
+  bool isOffline = false;
+  List<Map<String, dynamic>> productos = [];
+  late StreamSubscription<List<ConnectivityResult>> _connectivitySub;
+
+  @override
+  void initState() {
+    super.initState();
+    _cargarDatosLocales();
+
+    _connectivitySub = Connectivity().onConnectivityChanged.listen((results) {
+      bool sinInternet = results.contains(ConnectivityResult.none);
+      setState(() {
+        isOffline = sinInternet;
+      });
+
+      if (!sinInternet) {
+        SyncService().processSyncQueue();
+        if (mounted) {
+          ScaffoldMessenger.of(context).showSnackBar(
+            const SnackBar(content: Text('Conexión restablecida. Sincronizando...')),
+          );
+        }
+      }
+    });
+  }
+
+  Future<void> _cargarDatosLocales() async {
+    final datos = await DatabaseService.instance.getProductosLocales();
+    if (mounted) {
+      setState(() {
+        productos = datos;
+      });
+    }
+  }
+
+  void _mostrarFormularioCrearProducto() {
+    final TextEditingController nombreController = TextEditingController();
+    final TextEditingController precioController = TextEditingController();
+    final GlobalKey<FormState> formKey = GlobalKey<FormState>();
+
+    showModalBottomSheet(
+      context: context,
+      isScrollControlled: true,
+      shape: const RoundedRectangleBorder(
+        borderRadius: BorderRadius.vertical(top: Radius.circular(20)),
       ),
-      body: SingleChildScrollView(
-        padding: const EdgeInsets.all(20.0),
-        child: Center(
-          child: Container(
-            constraints: const BoxConstraints(maxWidth: 900),
+      builder: (modalContext) {
+        return Padding(
+          padding: EdgeInsets.only(
+            top: 20,
+            left: 20,
+            right: 20,
+            bottom: MediaQuery.of(modalContext).viewInsets.bottom + 20,
+          ),
+          child: Form(
+            key: formKey,
             child: Column(
-              crossAxisAlignment: CrossAxisAlignment.start,
+              mainAxisSize: MainAxisSize.min,
+              crossAxisAlignment: CrossAxisAlignment.stretch,
               children: [
-                // 1. BANNER / HEADER
-                Container(
-                  width: double.infinity,
-                  padding: const EdgeInsets.all(24.0),
-                  decoration: BoxDecoration(
-                    gradient: const LinearGradient(
-                      colors: [Color(0xFF3B5998), Color(0xFF4C6EF5)],
-                      begin: Alignment.topLeft,
-                      end: Alignment.bottomRight,
-                    ),
-                    borderRadius: BorderRadius.circular(20),
-                    boxShadow: [
-                      BoxShadow(
-                        color: Colors.indigo.withOpacity(0.2),
-                        blurRadius: 15,
-                        offset: const Offset(0, 8),
-                      ),
-                    ],
-                  ),
-                  child: Row(
-                    children: [
-                      Expanded(
-                        child: Column(
-                          crossAxisAlignment: CrossAxisAlignment.start,
-                          children: [
-                            Container(
-                              padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 4),
-                              decoration: BoxDecoration(
-                                color: Colors.white24,
-                                borderRadius: BorderRadius.circular(12),
-                              ),
-                              child: Text(
-                                'ID Usuario: #$idUsuario',
-                                style: const TextStyle(color: Colors.white, fontSize: 12, fontWeight: FontWeight.w600),
-                              ),
-                            ),
-                            const SizedBox(height: 12),
-                            Text(
-                              '¡Bienvenido, ${nombreUsuario.toUpperCase()}! 👋',
-                              style: const TextStyle(
-                                color: Colors.white,
-                                fontSize: 24,
-                                fontWeight: FontWeight.bold,
-                              ),
-                            ),
-                            const SizedBox(height: 6),
-                            const Text(
-                              'Mira el catálogo de la tienda, revisa fotos y opina sobre calidad y precio.',
-                              style: TextStyle(color: Colors.white70, fontSize: 14),
-                            ),
-                          ],
-                        ),
-                      ),
-                      const SizedBox(width: 16),
-                      const CircleAvatar(
-                        radius: 35,
-                        backgroundColor: Colors.white12,
-                        child: Icon(Icons.person_rounded, size: 45, color: Colors.white),
-                      ),
-                    ],
-                  ),
-                ),
-
-                const SizedBox(height: 28),
-
-                // 2. RESUMEN GENERAL
-                Text(
-                  'Resumen General',
-                  style: TextStyle(fontSize: 18, fontWeight: FontWeight.bold, color: Colors.black.withOpacity(0.8)),
-                ),
-                const SizedBox(height: 12),
                 Row(
+                  mainAxisAlignment: MainAxisAlignment.spaceBetween,
                   children: [
-                    Expanded(child: _buildStatCard('Publicaciones', '12', Icons.article_outlined, Colors.blue)),
-                    const SizedBox(width: 12),
-                    Expanded(child: _buildStatCard('Vistas', '1.4k', Icons.remove_red_eye_outlined, Colors.green)),
-                    const SizedBox(width: 12),
-                    Expanded(child: _buildStatCard('Favoritos', '89', Icons.favorite_border, Colors.orange)),
+                    const Text(
+                      'Nuevo Producto',
+                      style: TextStyle(fontSize: 20, fontWeight: FontWeight.bold),
+                    ),
+                    IconButton(
+                      icon: const Icon(Icons.close),
+                      onPressed: () => Navigator.of(modalContext).pop(),
+                    ),
                   ],
                 ),
-
-                const SizedBox(height: 28),
-
-                // 3. ACCIONES PRINCIPALES
-                Text(
-                  'Acciones Rápidas',
-                  style: TextStyle(fontSize: 18, fontWeight: FontWeight.bold, color: Colors.black.withOpacity(0.8)),
+                const SizedBox(height: 15),
+                TextFormField(
+                  controller: nombreController,
+                  decoration: InputDecoration(
+                    labelText: 'Nombre del producto',
+                    border: OutlineInputBorder(borderRadius: BorderRadius.circular(12)),
+                    prefixIcon: const Icon(Icons.shopping_bag),
+                  ),
+                  validator: (value) {
+                    if (value == null || value.trim().isEmpty) {
+                      return 'Ingresa el nombre del producto';
+                    }
+                    return null;
+                  },
                 ),
-                const SizedBox(height: 12),
+                const SizedBox(height: 15),
+                TextFormField(
+                  controller: precioController,
+                  keyboardType: const TextInputType.numberWithOptions(decimal: true),
+                  decoration: InputDecoration(
+                    labelText: 'Precio (\$)',
+                    border: OutlineInputBorder(borderRadius: BorderRadius.circular(12)),
+                    prefixIcon: const Icon(Icons.attach_money),
+                  ),
+                  validator: (value) {
+                    if (value == null || value.trim().isEmpty) {
+                      return 'Ingresa el precio';
+                    }
+                    if (double.tryParse(value) == null) {
+                      return 'Ingresa un número válido';
+                    }
+                    return null;
+                  },
+                ),
+                const SizedBox(height: 20),
+                ElevatedButton(
+                  onPressed: () async {
+                    if (formKey.currentState?.validate() ?? false) {
+                      final String nombre = nombreController.text.trim();
+                      final double precio = double.parse(precioController.text.trim());
+                      final clientUuid = const Uuid().v4();
 
-                _buildActionCard(
-                  context,
-                  title: 'Crear publicación',
-                  subtitle: 'Sube fotos de una nueva prenda para recibir opiniones',
-                  icon: Icons.add_circle_outline_rounded,
-                  iconColor: const Color(0xFF3B5998),
-                  onTap: () async {
-                    final nuevaPrenda = await Navigator.push<Prenda>(
-                      context,
-                      MaterialPageRoute(
-                        builder: (context) => const CrearPublicacionScreen(),
-                      ),
-                    );
+                      final nuevoProducto = {
+                        'nombre': nombre,
+                        'precio': precio,
+                        'last_updated_server': isOffline ? 'Pendiente' : DateTime.now().toString().split('.')[0],
+                      };
 
-                    if (nuevaPrenda != null && context.mounted) {
-                      ScaffoldMessenger.of(context).showSnackBar(
-                        SnackBar(
-                          content: Text('¡Publicación "${nuevaPrenda.nombre}" creada con éxito!'),
-                          backgroundColor: Colors.green,
-                        ),
-                      );
+                      // 1. Guardar en la base de datos / memoria
+                      await DatabaseService.instance.insertarProductoLocal(nuevoProducto);
+
+                      if (isOffline) {
+                        await DatabaseService.instance.addToQueue(
+                          clientUuid,
+                          'http://localhost:5000/api/productos',
+                          '{"nombre": "$nombre", "precio": $precio, "client_uuid": "$clientUuid"}',
+                        );
+                      }
+
+                      // 2. Cerrar el modal y refrescar la pantalla inmediatamente
+                      if (mounted) {
+                        Navigator.of(modalContext).pop();
+                        ScaffoldMessenger.of(context).showSnackBar(
+                          SnackBar(
+                            content: Text(
+                              isOffline 
+                                  ? 'Guardado en almacén local y cola pendientes' 
+                                  : 'Producto guardado en almacén local'
+                            ),
+                          ),
+                        );
+                      }
+
+                      // 3. Forzar actualización de datos en el estado
+                      await _cargarDatosLocales();
                     }
                   },
-                ),
-
-                const SizedBox(height: 14),
-
-                _buildActionCard(
-                  context,
-                  title: 'Ver publicaciones',
-                  subtitle: 'Explora prendas, mira fotos y opina sobre calidad y precio',
-                  icon: Icons.grid_view_rounded,
-                  iconColor: const Color(0xFF20C997),
-                  onTap: () {
-                    final prendaEjemplo = Prenda(
-                      id: 1,
-                      nombre: 'Camiseta Oversize Heavy Cotton',
-                      precioReferencial: 25.00,
-                      tipoTela: '100% Algodón Peinado (240 GSM)',
-                      categoria: 'Camisetas',
-                      fotos: [
-                        'https://images.unsplash.com/photo-1521572267360-ee0c2909d518?w=800',
-                        'https://images.unsplash.com/photo-1583743814966-8936f5b7be1a?w=800',
-                      ],
-                      comentarios: [
-                        Comentario(
-                          usuario: 'Carlos M.',
-                          texto: 'El grosor del algodón es excelente, no se deforma tras las lavadas. El precio de \$25 vale totalmente la pena.',
-                          calificacion: 5.0,
-                          fecha: 'Hace 2 días',
-                        ),
-                        Comentario(
-                          usuario: 'Andrea P.',
-                          texto: 'El corte oversize es bueno pero viene un poco más larga de lo esperado en la talla M.',
-                          calificacion: 4.0,
-                          fecha: 'Hace 5 días',
-                        ),
-                      ],
-                    );
-
-                    Navigator.push(
-                      context,
-                      MaterialPageRoute(
-                        builder: (context) => DetallePrendaScreen(prenda: prendaEjemplo),
-                      ),
-                    );
-                  },
-                ),
-
-                const SizedBox(height: 32),
-
-                // 4. BOTÓN CERRAR SESIÓN
-                Center(
-                  child: OutlinedButton.icon(
-                    style: OutlinedButton.styleFrom(
-                      foregroundColor: Colors.redAccent,
-                      side: const BorderSide(color: Colors.redAccent, width: 1.5),
-                      padding: const EdgeInsets.symmetric(horizontal: 24, vertical: 12),
-                      shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(12)),
+                  style: ElevatedButton.styleFrom(
+                    backgroundColor: Colors.deepPurple,
+                    foregroundColor: Colors.white,
+                    padding: const EdgeInsets.symmetric(vertical: 14),
+                    shape: RoundedRectangleBorder(
+                      borderRadius: BorderRadius.circular(12),
                     ),
-                    icon: const Icon(Icons.logout_rounded),
-                    label: const Text('Cerrar sesión', style: TextStyle(fontWeight: FontWeight.bold)),
-                    onPressed: () {
-                      Navigator.pop(context);
-                    },
                   ),
+                  child: const Text('Guardar Producto', style: TextStyle(fontSize: 16)),
                 ),
               ],
             ),
           ),
-        ),
-      ),
+        );
+      },
     );
   }
 
-  Widget _buildStatCard(String label, String value, IconData icon, Color color) {
-    return Container(
-      padding: const EdgeInsets.all(16),
-      decoration: BoxDecoration(
-        color: Colors.white,
-        borderRadius: BorderRadius.circular(16),
-        boxShadow: [
-          BoxShadow(
-            color: Colors.black.withOpacity(0.04),
-            blurRadius: 10,
-            offset: const Offset(0, 4),
+  Future<void> _cerrarSesion() async {
+    await SecureStorageService().clearAll();
+    await DatabaseService.instance.clearAllData();
+
+    if (!mounted) return;
+    ScaffoldMessenger.of(context).showSnackBar(
+      const SnackBar(content: Text('Sesión cerrada. Almacén local eliminado.')),
+    );
+    await _cargarDatosLocales();
+  }
+
+  @override
+  void dispose() {
+    _connectivitySub.cancel();
+    super.dispose();
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    return Scaffold(
+      appBar: AppBar(
+        title: Text('Bienvenido, ${widget.nombreUsuario.toUpperCase()}'),
+        actions: [
+          IconButton(
+            icon: const Icon(Icons.logout),
+            onPressed: _cerrarSesion,
           ),
         ],
       ),
-      child: Column(
-        crossAxisAlignment: CrossAxisAlignment.start,
+      body: Column(
         children: [
-          Icon(icon, color: color, size: 28),
-          const SizedBox(height: 12),
-          Text(value, style: const TextStyle(fontSize: 20, fontWeight: FontWeight.bold)),
-          Text(label, style: const TextStyle(fontSize: 12, color: Colors.grey)),
+          if (isOffline)
+            Container(
+              color: Colors.orange.shade900,
+              padding: const EdgeInsets.all(10),
+              width: double.infinity,
+              child: const Row(
+                children: [
+                  Icon(Icons.wifi_off, color: Colors.white),
+                  SizedBox(width: 10),
+                  Expanded(
+                    child: Text(
+                      'Modo sin conexión - Datos locales desactualizados',
+                      style: TextStyle(color: Colors.white, fontWeight: FontWeight.bold),
+                    ),
+                  ),
+                ],
+              ),
+            ),
+
+          Expanded(
+            child: productos.isEmpty
+                ? const Center(child: Text('No hay datos en el almacén local.'))
+                : ListView.builder(
+                    itemCount: productos.length,
+                    itemBuilder: (context, index) {
+                      final p = productos[index];
+                      return ListTile(
+                        leading: const CircleAvatar(
+                          child: Icon(Icons.shopping_bag),
+                        ),
+                        title: Text(p['nombre'] ?? 'Sin Nombre'),
+                        subtitle: Text('Sincronizado: ${p['last_updated_server'] ?? 'N/A'}'),
+                        trailing: Text('\$${p['precio']}'),
+                      );
+                    },
+                  ),
+          ),
         ],
       ),
-    );
-  }
-
-  Widget _buildActionCard(
-    BuildContext context, {
-    required String title,
-    required String subtitle,
-    required IconData icon,
-    required Color iconColor,
-    required VoidCallback onTap,
-  }) {
-    return Material(
-      color: Colors.white,
-      borderRadius: BorderRadius.circular(16),
-      elevation: 2,
-      shadowColor: Colors.black12,
-      child: InkWell(
-        onTap: onTap,
-        borderRadius: BorderRadius.circular(16),
-        child: Padding(
-          padding: const EdgeInsets.all(18.0),
-          child: Row(
-            children: [
-              Container(
-                padding: const EdgeInsets.all(12),
-                decoration: BoxDecoration(
-                  color: iconColor.withOpacity(0.12),
-                  borderRadius: BorderRadius.circular(12),
-                ),
-                child: Icon(icon, color: iconColor, size: 30),
-              ),
-              const SizedBox(width: 16),
-              Expanded(
-                child: Column(
-                  crossAxisAlignment: CrossAxisAlignment.start,
-                  children: [
-                    Text(
-                      title,
-                      style: const TextStyle(fontSize: 16, fontWeight: FontWeight.bold),
-                    ),
-                    const SizedBox(height: 4),
-                    Text(
-                      subtitle,
-                      style: const TextStyle(fontSize: 13, color: Colors.grey),
-                    ),
-                  ],
-                ),
-              ),
-              const Icon(Icons.arrow_forward_ios_rounded, size: 18, color: Colors.grey),
-            ],
-          ),
-        ),
+      floatingActionButton: FloatingActionButton(
+        onPressed: _mostrarFormularioCrearProducto,
+        child: const Icon(Icons.add),
       ),
     );
   }
