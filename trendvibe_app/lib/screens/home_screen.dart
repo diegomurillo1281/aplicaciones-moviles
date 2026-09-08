@@ -48,7 +48,35 @@ class _HomeScreenState extends State<HomeScreen> {
   }
 
   Future<void> _cargarDatosLocales() async {
-    final datos = await DatabaseService.instance.getProductosLocales();
+    var datos = await DatabaseService.instance.getProductosLocales();
+
+    // Si la base de datos local no tiene productos, inserta 3 por defecto
+    if (datos.isEmpty) {
+      final productosBase = [
+        {
+          'nombre': 'Camiseta TrendVibe',
+          'precio': 25.00,
+          'last_updated_server': DateTime.now().toString().split('.')[0],
+        },
+        {
+          'nombre': 'Jean Slim Fit',
+          'precio': 45.00,
+          'last_updated_server': DateTime.now().toString().split('.')[0],
+        },
+        {
+          'nombre': 'Chaqueta Urbana',
+          'precio': 65.00,
+          'last_updated_server': DateTime.now().toString().split('.')[0],
+        },
+      ];
+
+      for (var prod in productosBase) {
+        await DatabaseService.instance.insertarProductoLocal(prod);
+      }
+
+      datos = await DatabaseService.instance.getProductosLocales();
+    }
+
     if (mounted) {
       setState(() {
         productos = datos;

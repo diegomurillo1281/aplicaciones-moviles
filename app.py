@@ -4,19 +4,29 @@ from flask import Flask, request, jsonify
 from flask_cors import CORS
 from flasgger import Swagger
 from werkzeug.security import generate_password_hash, check_password_hash
+from flask_jwt_extended import (
+    JWTManager, create_access_token, create_refresh_token,
+    jwt_required, get_jwt_identity
+)
+from datetime import timedelta
 
 app = Flask(__name__)
 
+# Configuración de JWT
+app.config["JWT_SECRET_KEY"] = "clave-secreta-trendvibe-2026"
+# VIGENCIA DE 1 MINUTO PARA FORZAR LA RENOVACIÓN (HTTP 401) EN EL VIDEO
+app.config["JWT_ACCESS_TOKEN_EXPIRES"] = timedelta(minutes=1)
+app.config["JWT_REFRESH_TOKEN_EXPIRES"] = timedelta(days=7)
+
+jwt = JWTManager(app)
 swagger = Swagger(app)
 
 cache = Cache(
     app,
-    config={
-       "CACHE_TYPE": "SimpleCache"
-    }
+    config={"CACHE_TYPE": "SimpleCache"}
 )
 
-# Permite que Flutter Web pueda consumir la API
+# Permite que Flutter Web / Emulador puedan consumir la API
 CORS(app)
 
 DATABASE = "trendvibe.db"
@@ -53,6 +63,7 @@ def init_db():
         usuario_id INTEGER NOT NULL,
         titulo TEXT NOT NULL,
         contenido TEXT NOT NULL,
+        client_uuid TEXT UNIQUE,
         fecha_creacion TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
         FOREIGN KEY(usuario_id)
         REFERENCES usuarios(id)
@@ -92,34 +103,6 @@ def home():
 # ==========================
 @app.route("/api/auth/register", methods=["POST"])
 def register():
-    """
-    Registro de usuario
-
-    ---
-    tags:
-      - Autenticación
-
-    parameters:
-      - in: body
-        name: body
-        required: true
-        schema:
-          type: object
-          properties:
-            nombre_usuario:
-              type: string
-            correo:
-              type: string
-            contrasena:
-              type: string
-
-    responses:
-      201:
-        description: Usuario registrado correctamente
-      400:
-        description: Error de validación
-    """
-
     data = request.get_json()
 
     if not data:
@@ -129,29 +112,34 @@ def register():
     correo = data.get("correo")
     password = data.get("contrasena")
 
-    if not nombre or not correo or not password:
-        return jsonify({"error": "Todos los campos son obligatorios"}), 400
+    # Validación con estado 422 para consistencia de campos
+    errors = {}
+    if not nombre or str(nombre).strip() == "":
+        errors["nombre_usuario"] = "El nombre de usuario es obligatorio"
+    if not correo or str(correo).strip() == "":
+        errors["correo"] = "El correo electrónico es obligatorio"
+    if not password or str(password).strip() == "":
+        errors["contrasena"] = "La contraseña es obligatoria"
+
+    if errors:
+        return jsonify({"message": "Error de validación", "errors": errors}), 422
 
     password_hash = generate_password_hash(password)
-
     conn = get_db_connection()
     cursor = conn.cursor()
 
     try:
-
         cursor.execute("""
         INSERT INTO usuarios(nombre_usuario,correo,contrasena)
         VALUES(?,?,?)
         """, (nombre, correo, password_hash))
 
         conn.commit()
-
         return jsonify({
             "mensaje": "Usuario registrado correctamente"
         }), 201
 
     except sqlite3.IntegrityError:
-
         return jsonify({
             "error": "El usuario o correo ya existe"
         }), 400
@@ -161,42 +149,11 @@ def register():
 
 
 # ==========================
-# LOGIN
+# LOGIN CON JWT
 # ==========================
 
 @app.route("/api/auth/login", methods=["POST"])
 def login():
-    """
-    Inicio de sesión
-
-    ---
-    tags:
-      - Autenticación
-
-    parameters:
-      - in: body
-        name: body
-        required: true
-
-        schema:
-          type: object
-
-          properties:
-
-            correo:
-              type: string
-
-            contrasena:
-              type: string
-
-    responses:
-
-      200:
-        description: Inicio de sesión exitoso
-
-      401:
-        description: Credenciales incorrectas
-    """
     data = request.get_json()
 
     if not data:
@@ -205,69 +162,97 @@ def login():
     correo = data.get("correo")
     password = data.get("contrasena")
 
-    conn = get_db_connection()
+    if not correo or not password:
+        return jsonify({
+            "errors": {
+                "correo": "Correo requerido" if not correo else "",
+                "contrasena": "Contraseña requerida" if not password else ""
+            }
+        }), 422
 
+    conn = get_db_connection()
     usuario = conn.execute(
         "SELECT * FROM usuarios WHERE correo=?",
         (correo,)
     ).fetchone()
-
     conn.close()
 
-    if usuario is None:
-
+    if usuario is None or not check_password_hash(usuario["contrasena"], password):
         return jsonify({
-            "error": "Correo no registrado"
+            "error": "Credenciales incorrectas"
         }), 401
 
-    if check_password_hash(usuario["contrasena"], password):
-
-        return jsonify({
-
-            "mensaje": "Inicio de sesión exitoso",
-
-            "usuario": {
-
-                "id": usuario["id"],
-                "nombre_usuario": usuario["nombre_usuario"],
-                "correo": usuario["correo"]
-
-            }
-
-        }), 200
+    # Generación de tokens JWT
+    identity_str = str(usuario["id"])
+    access_token = create_access_token(identity=identity_str)
+    refresh_token = create_refresh_token(identity=identity_str)
 
     return jsonify({
-        "error": "Contraseña incorrecta"
-    }), 401
+        "mensaje": "Inicio de sesión exitoso",
+        "access_token": access_token,
+        "refresh_token": refresh_token,
+        "usuario": {
+            "id": usuario["id"],
+            "nombre_usuario": usuario["nombre_usuario"],
+            "correo": usuario["correo"]
+        }
+    }), 200
 
 
 # ==========================
-# CREAR PUBLICACIÓN
+# RENOVACIÓN DE TOKEN (REFRESH)
+# ==========================
+
+@app.route("/api/auth/refresh", methods=["POST"])
+@jwt_required(refresh=True)
+def refresh():
+    identity = get_jwt_identity()
+    new_access_token = create_access_token(identity=identity)
+    return jsonify({
+        "access_token": new_access_token
+    }), 200
+
+
+# ==========================
+# CREAR PUBLICACIÓN (PROTEGIDA + VALIDACIÓN 422)
 # ==========================
 
 @app.route("/api/publicaciones", methods=["POST"])
+@jwt_required()
 def crear_publicacion():
-
-    data = request.get_json()
+    data = request.get_json() or {}
 
     usuario_id = data.get("usuario_id")
     titulo = data.get("titulo")
     contenido = data.get("contenido")
+    client_uuid = data.get("client_uuid")
+
+    # Validación 422 de campos para la demostración en video
+    errors = {}
+    if not titulo or str(titulo).strip() == "":
+        errors["titulo"] = "El título de la publicación es obligatorio."
+    if not contenido or str(contenido).strip() == "":
+        errors["contenido"] = "El contenido no puede estar vacío."
+
+    if errors:
+        return jsonify({"message": "Error de validación", "errors": errors}), 422
 
     conn = get_db_connection()
     cursor = conn.cursor()
 
-    cursor.execute("""
+    try:
+        cursor.execute("""
+        INSERT INTO publicaciones(usuario_id, titulo, contenido, client_uuid)
+        VALUES(?,?,?,?)
+        """, (usuario_id, titulo, contenido, client_uuid))
 
-    INSERT INTO publicaciones(usuario_id,titulo,contenido)
-
-    VALUES(?,?,?)
-
-    """, (usuario_id, titulo, contenido))
-
-    conn.commit()
-
-    conn.close()
+        conn.commit()
+    except sqlite3.IntegrityError:
+        # Previene duplicados en caso de reintentos con la cola offline
+        conn.close()
+        return jsonify({"mensaje": "La publicación ya existe (idempotencia)"}), 200
+    finally:
+        conn.close()
 
     cache.clear()
 
@@ -277,33 +262,13 @@ def crear_publicacion():
 
 
 # ==========================
-# LISTAR PUBLICACIONES
+# LISTAR PUBLICACIONES (PROTEGIDA)
 # ==========================
 
-@cache.cached(timeout=30)
 @app.route("/api/publicaciones", methods=["GET"])
+@jwt_required()
+@cache.cached(timeout=30, query_string=True)
 def listar_publicaciones():
-    """
-    Obtener publicaciones
-
-    ---
-    tags:
-      - Publicaciones
-
-    parameters:
-      - name: page
-        in: query
-        type: integer
-
-      - name: per_page
-        in: query
-        type: integer
-
-    responses:
-      200:
-        description: Lista de publicaciones
-    """
-
     pagina = request.args.get("page", 1, type=int)
     por_pagina = request.args.get("per_page", 5, type=int)
 
@@ -336,7 +301,6 @@ def listar_publicaciones():
     conn.close()
 
     datos = []
-
     for p in publicaciones:
         datos.append({
             "id": p["id"],
@@ -353,16 +317,24 @@ def listar_publicaciones():
     })
 
 # ==========================
-# ACTUALIZAR
+# ACTUALIZAR (PROTEGIDA)
 # ==========================
 
 @app.route("/api/publicaciones/<int:id>", methods=["PUT"])
+@jwt_required()
 def actualizar_publicacion(id):
-
-    data = request.get_json()
+    data = request.get_json() or {}
 
     titulo = data.get("titulo")
     contenido = data.get("contenido")
+
+    if not titulo or not contenido:
+        return jsonify({
+            "errors": {
+                "titulo": "Título obligatorio",
+                "contenido": "Contenido obligatorio"
+            }
+        }), 422
 
     conn = get_db_connection()
     cursor = conn.cursor()
@@ -380,13 +352,11 @@ def actualizar_publicacion(id):
 
     if cursor.rowcount == 0:
         conn.close()
-
         return jsonify({
             "error": "Publicación no encontrada"
         }), 404
 
     conn.close()
-
     cache.clear()
 
     return jsonify({
@@ -394,14 +364,13 @@ def actualizar_publicacion(id):
     })
 
 # ==========================
-# ELIMINAR
+# ELIMINAR (PROTEGIDA)
 # ==========================
 
 @app.route("/api/publicaciones/<int:id>", methods=["DELETE"])
+@jwt_required()
 def eliminar_publicacion(id):
-
     conn = get_db_connection()
-
     cursor = conn.cursor()
 
     cursor.execute(
@@ -412,15 +381,12 @@ def eliminar_publicacion(id):
     conn.commit()
 
     if cursor.rowcount == 0:
-
         conn.close()
-
         return jsonify({
             "error": "Publicación no encontrada"
         }), 404
 
-        conn.close()
-
+    conn.close()
     cache.clear()
 
     return jsonify({
