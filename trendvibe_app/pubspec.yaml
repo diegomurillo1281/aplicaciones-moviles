@@ -5,7 +5,7 @@ publish_to: 'none'
 version: 1.0.0+1
 
 environment:
-  sdk: ^3.11.5
+  sdk: '>=3.0.0 <4.0.0'
 
 dependencies:
   flutter:
@@ -16,28 +16,35 @@ dependencies:
 
   # Peticiones HTTP
   http: ^1.2.1
+  dio: ^5.4.0
 
-  # Almacenamiento seguro de tokens (KeyStore / Keychain)
-  flutter_secure_storage: ^9.2.2
+  # Almacenamiento seguro de tokens
+  flutter_secure_storage: ^9.0.0
 
   # Base de datos local SQLite
-  sqflite: ^2.3.3+1
+  sqflite: ^2.3.0
   path: ^1.9.0
+  sqflite_common_ffi: ^2.3.0
+  sqflite_common_ffi_web: ^0.4.0
 
-  # Detección de conexión (Modo Avión)
-  connectivity_plus: ^6.0.3
+  # Detección de conexión
+  connectivity_plus: ^5.0.2
 
-  # Generador de UUID para la cola de peticiones
-  uuid: ^4.4.0
-  sqflite_common_ffi: ^2.4.0+3
-  sqflite_common_ffi_web: ^1.1.1
-  dio: ^5.11.1
+  # Utilidades
+  uuid: ^4.3.3
+  provider: ^6.1.1
+  shared_preferences: ^2.2.2
+
+  # Funcionalidades Nativas (Versiones estables alineadas con Android SDK 34)
+  image_picker: ^1.1.2
+  geolocator: ^11.0.0
+  permission_handler: 11.3.1
 
 dev_dependencies:
   flutter_test:
     sdk: flutter
 
-  flutter_lints: ^6.0.0
+  flutter_lints: ^3.0.0
 
 flutter:
   uses-material-design: true

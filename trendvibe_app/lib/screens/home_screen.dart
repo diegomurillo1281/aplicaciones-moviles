@@ -1,295 +1,386 @@
-import 'dart:async';
+import 'dart:io';
+import 'package:flutter/foundation.dart'; // Importante para kIsWeb
 import 'package:flutter/material.dart';
 import 'package:connectivity_plus/connectivity_plus.dart';
-import 'package:uuid/uuid.dart';
+import 'package:image_picker/image_picker.dart';
+
+import '../models/prenda_model.dart';
 import '../services/database_service.dart';
-import '../services/secure_storage_service.dart';
-import '../services/sync_service.dart';
 
 class HomeScreen extends StatefulWidget {
-  final String nombreUsuario;
-  final String idUsuario;
-
-  const HomeScreen({
-    Key? key, 
-    required this.nombreUsuario, 
-    required this.idUsuario
-  }) : super(key: key);
+  const HomeScreen({Key? key}) : super(key: key);
 
   @override
   State<HomeScreen> createState() => _HomeScreenState();
 }
 
 class _HomeScreenState extends State<HomeScreen> {
-  bool isOffline = false;
-  List<Map<String, dynamic>> productos = [];
-  late StreamSubscription<List<ConnectivityResult>> _connectivitySub;
+  final ImagePicker _picker = ImagePicker();
+  List<PrendaModel> _prendas = [];
+  bool _isLoading = true;
+  String? _rutaImagenSeleccionada;
+
+  final _nombreController = TextEditingController();
+  final _precioController = TextEditingController();
+  final _stockController = TextEditingController();
 
   @override
   void initState() {
     super.initState();
-    _cargarDatosLocales();
-
-    _connectivitySub = Connectivity().onConnectivityChanged.listen((results) {
-      bool sinInternet = results.contains(ConnectivityResult.none);
-      setState(() {
-        isOffline = sinInternet;
-      });
-
-      if (!sinInternet) {
-        SyncService().processSyncQueue();
-        if (mounted) {
-          ScaffoldMessenger.of(context).showSnackBar(
-            const SnackBar(content: Text('Conexión restablecida. Sincronizando...')),
-          );
-        }
-      }
-    });
+    _cargarPrendas();
   }
 
-  Future<void> _cargarDatosLocales() async {
-    var datos = await DatabaseService.instance.getProductosLocales();
+  @override
+  void dispose() {
+    _nombreController.dispose();
+    _precioController.dispose();
+    _stockController.dispose();
+    super.dispose();
+  }
 
-    // Si la base de datos local no tiene productos, inserta 3 por defecto
-    if (datos.isEmpty) {
-      final productosBase = [
-        {
-          'nombre': 'Camiseta TrendVibe',
-          'precio': 25.00,
-          'last_updated_server': DateTime.now().toString().split('.')[0],
-        },
-        {
-          'nombre': 'Jean Slim Fit',
-          'precio': 45.00,
-          'last_updated_server': DateTime.now().toString().split('.')[0],
-        },
-        {
-          'nombre': 'Chaqueta Urbana',
-          'precio': 65.00,
-          'last_updated_server': DateTime.now().toString().split('.')[0],
-        },
-      ];
-
-      for (var prod in productosBase) {
-        await DatabaseService.instance.insertarProductoLocal(prod);
-      }
-
-      datos = await DatabaseService.instance.getProductosLocales();
-    }
-
-    if (mounted) {
+  Future<void> _cargarPrendas() async {
+    setState(() => _isLoading = true);
+    try {
+      final prendas = await DBService.db.obtenerPrendas();
       setState(() {
-        productos = datos;
+        _prendas = prendas;
+        _isLoading = false;
       });
+    } catch (e) {
+      setState(() => _isLoading = false);
+      _mostrarSnackBar('Error al cargar el inventario: $e');
     }
   }
 
-  void _mostrarFormularioCrearProducto() {
-    final TextEditingController nombreController = TextEditingController();
-    final TextEditingController precioController = TextEditingController();
-    final GlobalKey<FormState> formKey = GlobalKey<FormState>();
+  Future<void> _seleccionarImagen(ImageSource source) async {
+    try {
+      final XFile? image = await _picker.pickImage(
+        source: source,
+        imageQuality: 80,
+      );
+      if (image != null) {
+        setState(() {
+          _rutaImagenSeleccionada = image.path;
+        });
+      }
+    } catch (e) {
+      _mostrarSnackBar('Error al seleccionar imagen: $e');
+    }
+  }
 
+  Future<void> _guardarPrenda() async {
+    if (_nombreController.text.trim().isEmpty ||
+        _precioController.text.trim().isEmpty ||
+        _stockController.text.trim().isEmpty) {
+      _mostrarSnackBar('Por favor completa todos los campos requeridos');
+      return;
+    }
+
+    final nuevaPrenda = PrendaModel(
+      nombre: _nombreController.text.trim(),
+      precio: double.tryParse(_precioController.text.trim()) ?? 0.0,
+      stock: int.tryParse(_stockController.text.trim()) ?? 0,
+      imagenUrl: _rutaImagenSeleccionada,
+    );
+
+    try {
+      await DBService.db.insertarPrenda(nuevaPrenda);
+      _limpiarFormulario();
+      Navigator.of(context).pop();
+      _cargarPrendas();
+      _mostrarSnackBar('Prenda guardada en SQLite');
+    } catch (e) {
+      _mostrarSnackBar('Error al registrar prenda: $e');
+    }
+  }
+
+  Future<void> _eliminarPrenda(int id) async {
+    try {
+      await DBService.db.eliminarPrenda(id);
+      _cargarPrendas();
+      _mostrarSnackBar('Prenda eliminada del inventario');
+    } catch (e) {
+      _mostrarSnackBar('Error al eliminar prenda: $e');
+    }
+  }
+
+  void _limpiarFormulario() {
+    _nombreController.clear();
+    _precioController.clear();
+    _stockController.clear();
+    _rutaImagenSeleccionada = null;
+  }
+
+  void _mostrarSnackBar(String mensaje) {
+    if (!mounted) return;
+    ScaffoldMessenger.of(context).showSnackBar(
+      SnackBar(content: Text(mensaje), duration: const Duration(seconds: 3)),
+    );
+  }
+
+  void _abrirModalFormulario() {
+    _limpiarFormulario();
     showModalBottomSheet(
       context: context,
       isScrollControlled: true,
       shape: const RoundedRectangleBorder(
         borderRadius: BorderRadius.vertical(top: Radius.circular(20)),
       ),
-      builder: (modalContext) {
-        return Padding(
-          padding: EdgeInsets.only(
-            top: 20,
-            left: 20,
-            right: 20,
-            bottom: MediaQuery.of(modalContext).viewInsets.bottom + 20,
-          ),
-          child: Form(
-            key: formKey,
-            child: Column(
-              mainAxisSize: MainAxisSize.min,
-              crossAxisAlignment: CrossAxisAlignment.stretch,
-              children: [
-                Row(
-                  mainAxisAlignment: MainAxisAlignment.spaceBetween,
-                  children: [
-                    const Text(
-                      'Nuevo Producto',
-                      style: TextStyle(fontSize: 20, fontWeight: FontWeight.bold),
-                    ),
-                    IconButton(
-                      icon: const Icon(Icons.close),
-                      onPressed: () => Navigator.of(modalContext).pop(),
-                    ),
-                  ],
-                ),
-                const SizedBox(height: 15),
-                TextFormField(
-                  controller: nombreController,
-                  decoration: InputDecoration(
-                    labelText: 'Nombre del producto',
-                    border: OutlineInputBorder(borderRadius: BorderRadius.circular(12)),
-                    prefixIcon: const Icon(Icons.shopping_bag),
-                  ),
-                  validator: (value) {
-                    if (value == null || value.trim().isEmpty) {
-                      return 'Ingresa el nombre del producto';
-                    }
-                    return null;
-                  },
-                ),
-                const SizedBox(height: 15),
-                TextFormField(
-                  controller: precioController,
-                  keyboardType: const TextInputType.numberWithOptions(decimal: true),
-                  decoration: InputDecoration(
-                    labelText: 'Precio (\$)',
-                    border: OutlineInputBorder(borderRadius: BorderRadius.circular(12)),
-                    prefixIcon: const Icon(Icons.attach_money),
-                  ),
-                  validator: (value) {
-                    if (value == null || value.trim().isEmpty) {
-                      return 'Ingresa el precio';
-                    }
-                    if (double.tryParse(value) == null) {
-                      return 'Ingresa un número válido';
-                    }
-                    return null;
-                  },
-                ),
-                const SizedBox(height: 20),
-                ElevatedButton(
-                  onPressed: () async {
-                    if (formKey.currentState?.validate() ?? false) {
-                      final String nombre = nombreController.text.trim();
-                      final double precio = double.parse(precioController.text.trim());
-                      final clientUuid = const Uuid().v4();
-
-                      final nuevoProducto = {
-                        'nombre': nombre,
-                        'precio': precio,
-                        'last_updated_server': isOffline ? 'Pendiente' : DateTime.now().toString().split('.')[0],
-                      };
-
-                      // 1. Guardar en la base de datos / memoria
-                      await DatabaseService.instance.insertarProductoLocal(nuevoProducto);
-
-                      if (isOffline) {
-                        await DatabaseService.instance.addToQueue(
-                          clientUuid,
-                          'http://localhost:5000/api/productos',
-                          '{"nombre": "$nombre", "precio": $precio, "client_uuid": "$clientUuid"}',
-                        );
-                      }
-
-                      // 2. Cerrar el modal y refrescar la pantalla inmediatamente
-                      if (mounted) {
-                        Navigator.of(modalContext).pop();
-                        ScaffoldMessenger.of(context).showSnackBar(
-                          SnackBar(
-                            content: Text(
-                              isOffline 
-                                  ? 'Guardado en almacén local y cola pendientes' 
-                                  : 'Producto guardado en almacén local'
-                            ),
-                          ),
-                        );
-                      }
-
-                      // 3. Forzar actualización de datos en el estado
-                      await _cargarDatosLocales();
-                    }
-                  },
-                  style: ElevatedButton.styleFrom(
-                    backgroundColor: Colors.deepPurple,
-                    foregroundColor: Colors.white,
-                    padding: const EdgeInsets.symmetric(vertical: 14),
-                    shape: RoundedRectangleBorder(
-                      borderRadius: BorderRadius.circular(12),
-                    ),
-                  ),
-                  child: const Text('Guardar Producto', style: TextStyle(fontSize: 16)),
-                ),
-              ],
+      builder: (ctx) => StatefulBuilder(
+        builder: (BuildContext context, StateSetter setModalState) {
+          return Padding(
+            padding: EdgeInsets.only(
+              top: 20,
+              left: 20,
+              right: 20,
+              bottom: MediaQuery.of(context).viewInsets.bottom + 20,
             ),
-          ),
+            child: SingleChildScrollView(
+              child: Column(
+                mainAxisSize: MainAxisSize.min,
+                crossAxisAlignment: CrossAxisAlignment.stretch,
+                children: [
+                  const Text(
+                    'Nueva Prenda - TrendVibe',
+                    style: TextStyle(fontSize: 18, fontWeight: FontWeight.bold),
+                    textAlign: TextAlign.center,
+                  ),
+                  const SizedBox(height: 15),
+                  TextField(
+                    controller: _nombreController,
+                    decoration: const InputDecoration(
+                      labelText: 'Nombre de Prenda',
+                      border: OutlineInputBorder(),
+                    ),
+                  ),
+                  const SizedBox(height: 10),
+                  Row(
+                    children: [
+                      Expanded(
+                        child: TextField(
+                          controller: _precioController,
+                          keyboardType: const TextInputType.numberWithOptions(decimal: true),
+                          decoration: const InputDecoration(
+                            labelText: 'Precio (\$)',
+                            border: OutlineInputBorder(),
+                          ),
+                        ),
+                      ),
+                      const SizedBox(width: 10),
+                      Expanded(
+                        child: TextField(
+                          controller: _stockController,
+                          keyboardType: TextInputType.number,
+                          decoration: const InputDecoration(
+                            labelText: 'Stock',
+                            border: OutlineInputBorder(),
+                          ),
+                        ),
+                      ),
+                    ],
+                  ),
+                  const SizedBox(height: 15),
+                  Row(
+                    mainAxisAlignment: MainAxisAlignment.spaceEvenly,
+                    children: [
+                      ElevatedButton.icon(
+                        onPressed: () async {
+                          await _seleccionarImagen(ImageSource.camera);
+                          setModalState(() {});
+                        },
+                        icon: const Icon(Icons.camera_alt),
+                        label: const Text('Cámara'),
+                      ),
+                      ElevatedButton.icon(
+                        onPressed: () async {
+                          await _seleccionarImagen(ImageSource.gallery);
+                          setModalState(() {});
+                        },
+                        icon: const Icon(Icons.photo_library),
+                        label: const Text('Galería'),
+                      ),
+                    ],
+                  ),
+                  const SizedBox(height: 10),
+                  if (_rutaImagenSeleccionada != null && _rutaImagenSeleccionada!.isNotEmpty)
+                    Container(
+                      height: 120,
+                      decoration: BoxDecoration(
+                        border: Border.all(color: Colors.grey),
+                        borderRadius: BorderRadius.circular(8),
+                      ),
+                      child: ClipRRect(
+                        borderRadius: BorderRadius.circular(8),
+                        child: kIsWeb
+                            ? Image.network(
+                                _rutaImagenSeleccionada!,
+                                fit: BoxFit.cover,
+                                errorBuilder: (context, error, stackTrace) =>
+                                    const Icon(Icons.broken_image, size: 40),
+                              )
+                            : Image.file(
+                                File(_rutaImagenSeleccionada!),
+                                fit: BoxFit.cover,
+                              ),
+                      ),
+                    ),
+                  const SizedBox(height: 20),
+                  ElevatedButton(
+                    onPressed: _guardarPrenda,
+                    style: ElevatedButton.styleFrom(
+                      padding: const EdgeInsets.symmetric(vertical: 14),
+                      backgroundColor: Colors.deepPurple,
+                    ),
+                    child: const Text(
+                      'Guardar en BD',
+                      style: TextStyle(color: Colors.white, fontSize: 16),
+                    ),
+                  ),
+                ],
+              ),
+            ),
+          );
+        },
+      ),
+    );
+  }
+
+  Widget _construirAvatarImagen(String? ruta) {
+    if (ruta != null && ruta.isNotEmpty) {
+      if (kIsWeb) {
+        return CircleAvatar(
+          radius: 28,
+          backgroundImage: NetworkImage(ruta),
         );
-      },
+      } else {
+        final file = File(ruta);
+        if (file.existsSync()) {
+          return CircleAvatar(
+            radius: 28,
+            backgroundImage: FileImage(file),
+          );
+        }
+      }
+    }
+    return const CircleAvatar(
+      radius: 28,
+      backgroundColor: Colors.deepPurple,
+      child: Icon(Icons.checkroom, color: Colors.white),
     );
-  }
-
-  Future<void> _cerrarSesion() async {
-    await SecureStorageService().clearAll();
-    await DatabaseService.instance.clearAllData();
-
-    if (!mounted) return;
-    ScaffoldMessenger.of(context).showSnackBar(
-      const SnackBar(content: Text('Sesión cerrada. Almacén local eliminado.')),
-    );
-    await _cargarDatosLocales();
-  }
-
-  @override
-  void dispose() {
-    _connectivitySub.cancel();
-    super.dispose();
   }
 
   @override
   Widget build(BuildContext context) {
     return Scaffold(
       appBar: AppBar(
-        title: Text('Bienvenido, ${widget.nombreUsuario.toUpperCase()}'),
+        title: const Text('Inventario TrendVibe'),
+        backgroundColor: Colors.deepPurple,
+        foregroundColor: Colors.white,
+        centerTitle: true,
         actions: [
           IconButton(
-            icon: const Icon(Icons.logout),
-            onPressed: _cerrarSesion,
+            icon: const Icon(Icons.refresh),
+            onPressed: _cargarPrendas,
           ),
         ],
       ),
       body: Column(
         children: [
-          if (isOffline)
-            Container(
-              color: Colors.orange.shade900,
-              padding: const EdgeInsets.all(10),
-              width: double.infinity,
-              child: const Row(
-                children: [
-                  Icon(Icons.wifi_off, color: Colors.white),
-                  SizedBox(width: 10),
-                  Expanded(
-                    child: Text(
-                      'Modo sin conexión - Datos locales desactualizados',
-                      style: TextStyle(color: Colors.white, fontWeight: FontWeight.bold),
-                    ),
-                  ),
-                ],
-              ),
-            ),
+          StreamBuilder<dynamic>(
+            stream: Connectivity().onConnectivityChanged,
+            builder: (context, snapshot) {
+              bool hayConexion = false;
 
+              if (snapshot.hasData) {
+                final data = snapshot.data;
+                if (data is List<ConnectivityResult>) {
+                  hayConexion = data.any((result) => result != ConnectivityResult.none);
+                } else if (data is ConnectivityResult) {
+                  hayConexion = data != ConnectivityResult.none;
+                }
+              }
+
+              return AnimatedContainer(
+                duration: const Duration(milliseconds: 300),
+                color: hayConexion ? Colors.green[700] : Colors.orange[800],
+                width: double.infinity,
+                padding: const EdgeInsets.symmetric(vertical: 6.0, horizontal: 16.0),
+                child: Row(
+                  mainAxisAlignment: MainAxisAlignment.center,
+                  children: [
+                    Icon(
+                      hayConexion ? Icons.wifi : Icons.wifi_off,
+                      color: Colors.white,
+                      size: 18,
+                    ),
+                    const SizedBox(width: 8),
+                    Text(
+                      hayConexion ? 'Modo Online (Sincronizado)' : 'Modo Offline (Base Local)',
+                      style: const TextStyle(
+                        color: Colors.white,
+                        fontWeight: FontWeight.w600,
+                        fontSize: 13,
+                      ),
+                    ),
+                  ],
+                ),
+              );
+            },
+          ),
           Expanded(
-            child: productos.isEmpty
-                ? const Center(child: Text('No hay datos en el almacén local.'))
-                : ListView.builder(
-                    itemCount: productos.length,
-                    itemBuilder: (context, index) {
-                      final p = productos[index];
-                      return ListTile(
-                        leading: const CircleAvatar(
-                          child: Icon(Icons.shopping_bag),
+            child: _isLoading
+                ? const Center(child: CircularProgressIndicator())
+                : _prendas.isEmpty
+                    ? const Center(
+                        child: Text(
+                          'No hay prendas registradas.\nUsa el botón + para agregar.',
+                          textAlign: TextAlign.center,
+                          style: TextStyle(color: Colors.grey, fontSize: 16),
                         ),
-                        title: Text(p['nombre'] ?? 'Sin Nombre'),
-                        subtitle: Text('Sincronizado: ${p['last_updated_server'] ?? 'N/A'}'),
-                        trailing: Text('\$${p['precio']}'),
-                      );
-                    },
-                  ),
+                      )
+                    : RefreshIndicator(
+                        onRefresh: _cargarPrendas,
+                        child: ListView.builder(
+                          itemCount: _prendas.length,
+                          padding: const EdgeInsets.all(8),
+                          itemBuilder: (context, index) {
+                            final prenda = _prendas[index];
+                            return Card(
+                              elevation: 2,
+                              margin: const EdgeInsets.symmetric(vertical: 6, horizontal: 4),
+                              child: ListTile(
+                                leading: _construirAvatarImagen(prenda.imagenUrl),
+                                title: Text(
+                                  prenda.nombre,
+                                  style: const TextStyle(
+                                    fontWeight: FontWeight.bold,
+                                    fontSize: 16,
+                                  ),
+                                ),
+                                subtitle: Text(
+                                  'Precio: \$${prenda.precio.toStringAsFixed(2)} | Stock: ${prenda.stock} uds.',
+                                ),
+                                trailing: IconButton(
+                                  icon: const Icon(Icons.delete, color: Colors.redAccent),
+                                  onPressed: () {
+                                    if (prenda.id != null) {
+                                      _eliminarPrenda(prenda.id!);
+                                    }
+                                  },
+                                ),
+                              ),
+                            );
+                          },
+                        ),
+                      ),
           ),
         ],
       ),
-      floatingActionButton: FloatingActionButton(
-        onPressed: _mostrarFormularioCrearProducto,
-        child: const Icon(Icons.add),
+      floatingActionButton: FloatingActionButton.extended(
+        onPressed: _abrirModalFormulario,
+        backgroundColor: Colors.deepPurple,
+        icon: const Icon(Icons.add, color: Colors.white),
+        label: const Text('Nueva Prenda', style: TextStyle(color: Colors.white)),
       ),
     );
   }

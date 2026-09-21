@@ -1,39 +1,38 @@
-class Comentario {
-  final String usuario;
-  final String texto;
-  final double calificacion;
-  final String fecha;
-
-  Comentario({
-    required this.usuario,
-    required this.texto,
-    required this.calificacion,
-    required this.fecha,
-  });
-}
-
-class Prenda {
-  final int id;
+class PrendaModel {
+  final int? id;
   final String nombre;
-  final double precioReferencial;
-  final String tipoTela;
-  final String categoria;
-  final List<String> fotos;
-  final List<Comentario> comentarios;
+  final double precio;
+  final int stock;
+  final String? imagenUrl;
 
-  Prenda({
-    required this.id,
+  PrendaModel({
+    this.id,
     required this.nombre,
-    required this.precioReferencial,
-    required this.tipoTela,
-    required this.categoria,
-    required this.fotos,
-    required this.comentarios,
+    required this.precio,
+    required this.stock,
+    this.imagenUrl,
   });
 
-  double get promedioCalificacion {
-    if (comentarios.isEmpty) return 0.0;
-    double suma = comentarios.fold(0, (prev, element) => prev + element.calificacion);
-    return suma / comentarios.length;
+  // Convertir un mapa (SQLite / API REST) a un objeto PrendaModel
+  factory PrendaModel.fromMap(Map<String, dynamic> json) => PrendaModel(
+        id: json['id'] as int?,
+        nombre: json['nombre'] as String? ?? '',
+        precio: (json['precio'] as num?)?.toDouble() ?? 0.0,
+        stock: json['stock'] as int? ?? 0,
+        imagenUrl: json['imagen_url'] as String?,
+      );
+
+  // Convertir el objeto a Map para inserción en SQLite o envío a Flask
+  Map<String, dynamic> toMap() {
+    final map = <String, dynamic>{
+      'nombre': nombre,
+      'precio': precio,
+      'stock': stock,
+      'imagen_url': imagenUrl,
+    };
+    if (id != null) {
+      map['id'] = id;
+    }
+    return map;
   }
 }

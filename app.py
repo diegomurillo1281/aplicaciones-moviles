@@ -1,402 +1,292 @@
-from flask_caching import Cache
-import sqlite3
-from flask import Flask, request, jsonify
-from flask_cors import CORS
-from flasgger import Swagger
-from werkzeug.security import generate_password_hash, check_password_hash
-from flask_jwt_extended import (
-    JWTManager, create_access_token, create_refresh_token,
-    jwt_required, get_jwt_identity
-)
-from datetime import timedelta
+import 'dart:async';
+import 'package:flutter/material.dart';
+import 'package:connectivity_plus/connectivity_plus.dart';
+import 'package:uuid/uuid.dart';
+import '../services/database_service.dart';
+import '../services/secure_storage_service.dart';
+import '../services/sync_service.dart';
 
-app = Flask(__name__)
+class HomeScreen extends StatefulWidget {
+  final String nombreUsuario;
+  final String? idUsuario;
 
-# Configuración de JWT
-app.config["JWT_SECRET_KEY"] = "clave-secreta-trendvibe-2026"
-# VIGENCIA DE 1 MINUTO PARA FORZAR LA RENOVACIÓN (HTTP 401) EN EL VIDEO
-app.config["JWT_ACCESS_TOKEN_EXPIRES"] = timedelta(minutes=1)
-app.config["JWT_REFRESH_TOKEN_EXPIRES"] = timedelta(days=7)
+  const HomeScreen({
+    Key? key,
+    required this.nombreUsuario,
+    this.idUsuario,
+  }) : super(key: key);
 
-jwt = JWTManager(app)
-swagger = Swagger(app)
+  @override
+  State<HomeScreen> createState() => _HomeScreenState();
+}
 
-cache = Cache(
-    app,
-    config={"CACHE_TYPE": "SimpleCache"}
-)
+class _HomeScreenState extends State<HomeScreen> {
+  bool isOffline = false;
+  List<Map<String, dynamic>> productos = [];
+  late StreamSubscription<List<ConnectivityResult>> _connectivitySub;
 
-# Permite que Flutter Web / Emulador puedan consumir la API
-CORS(app)
+  @override
+  void initState() {
+    super.initState();
+    _cargarDatosLocales();
 
-DATABASE = "trendvibe.db"
+    _connectivitySub = Connectivity().onConnectivityChanged.listen((results) {
+      bool sinInternet = results.contains(ConnectivityResult.none);
+      setState(() {
+        isOffline = sinInternet;
+      });
 
-
-# ==========================
-# CONEXIÓN A LA BASE DE DATOS
-# ==========================
-
-def get_db_connection():
-    conn = sqlite3.connect(DATABASE)
-    conn.row_factory = sqlite3.Row
-    conn.execute("PRAGMA foreign_keys = ON")
-    return conn
-
-
-def init_db():
-    conn = get_db_connection()
-    cursor = conn.cursor()
-
-    cursor.execute("""
-    CREATE TABLE IF NOT EXISTS usuarios(
-        id INTEGER PRIMARY KEY AUTOINCREMENT,
-        nombre_usuario TEXT NOT NULL UNIQUE,
-        correo TEXT NOT NULL UNIQUE,
-        contrasena TEXT NOT NULL,
-        fecha_registro TIMESTAMP DEFAULT CURRENT_TIMESTAMP
-    )
-    """)
-
-    cursor.execute("""
-    CREATE TABLE IF NOT EXISTS publicaciones(
-        id INTEGER PRIMARY KEY AUTOINCREMENT,
-        usuario_id INTEGER NOT NULL,
-        titulo TEXT NOT NULL,
-        contenido TEXT NOT NULL,
-        client_uuid TEXT UNIQUE,
-        fecha_creacion TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
-        FOREIGN KEY(usuario_id)
-        REFERENCES usuarios(id)
-        ON DELETE CASCADE
-    )
-    """)
-
-    # Índices de optimización
-    cursor.execute("""
-    CREATE INDEX IF NOT EXISTS idx_publicaciones_usuario
-    ON publicaciones(usuario_id)
-    """)
-
-    cursor.execute("""
-    CREATE INDEX IF NOT EXISTS idx_publicaciones_fecha
-    ON publicaciones(fecha_creacion)
-    """)
-
-    conn.commit()
-    conn.close()
-
-init_db()
-
-# ==========================
-# RUTA PRINCIPAL
-# ==========================
-
-@app.route("/")
-def home():
-    return jsonify({
-        "mensaje": "TrendVibe API funcionando correctamente"
-    })
-
-
-# ==========================
-# REGISTRO
-# ==========================
-@app.route("/api/auth/register", methods=["POST"])
-def register():
-    data = request.get_json()
-
-    if not data:
-        return jsonify({"error": "No se enviaron datos"}), 400
-
-    nombre = data.get("nombre_usuario")
-    correo = data.get("correo")
-    password = data.get("contrasena")
-
-    # Validación con estado 422 para consistencia de campos
-    errors = {}
-    if not nombre or str(nombre).strip() == "":
-        errors["nombre_usuario"] = "El nombre de usuario es obligatorio"
-    if not correo or str(correo).strip() == "":
-        errors["correo"] = "El correo electrónico es obligatorio"
-    if not password or str(password).strip() == "":
-        errors["contrasena"] = "La contraseña es obligatoria"
-
-    if errors:
-        return jsonify({"message": "Error de validación", "errors": errors}), 422
-
-    password_hash = generate_password_hash(password)
-    conn = get_db_connection()
-    cursor = conn.cursor()
-
-    try:
-        cursor.execute("""
-        INSERT INTO usuarios(nombre_usuario,correo,contrasena)
-        VALUES(?,?,?)
-        """, (nombre, correo, password_hash))
-
-        conn.commit()
-        return jsonify({
-            "mensaje": "Usuario registrado correctamente"
-        }), 201
-
-    except sqlite3.IntegrityError:
-        return jsonify({
-            "error": "El usuario o correo ya existe"
-        }), 400
-
-    finally:
-        conn.close()
-
-
-# ==========================
-# LOGIN CON JWT
-# ==========================
-
-@app.route("/api/auth/login", methods=["POST"])
-def login():
-    data = request.get_json()
-
-    if not data:
-        return jsonify({"error": "No se enviaron datos"}), 400
-
-    correo = data.get("correo")
-    password = data.get("contrasena")
-
-    if not correo or not password:
-        return jsonify({
-            "errors": {
-                "correo": "Correo requerido" if not correo else "",
-                "contrasena": "Contraseña requerida" if not password else ""
-            }
-        }), 422
-
-    conn = get_db_connection()
-    usuario = conn.execute(
-        "SELECT * FROM usuarios WHERE correo=?",
-        (correo,)
-    ).fetchone()
-    conn.close()
-
-    if usuario is None or not check_password_hash(usuario["contrasena"], password):
-        return jsonify({
-            "error": "Credenciales incorrectas"
-        }), 401
-
-    # Generación de tokens JWT
-    identity_str = str(usuario["id"])
-    access_token = create_access_token(identity=identity_str)
-    refresh_token = create_refresh_token(identity=identity_str)
-
-    return jsonify({
-        "mensaje": "Inicio de sesión exitoso",
-        "access_token": access_token,
-        "refresh_token": refresh_token,
-        "usuario": {
-            "id": usuario["id"],
-            "nombre_usuario": usuario["nombre_usuario"],
-            "correo": usuario["correo"]
+      if (!sinInternet) {
+        SyncService().processSyncQueue();
+        if (mounted) {
+          ScaffoldMessenger.of(context).showSnackBar(
+            const SnackBar(content: Text('Conexión restablecida. Sincronizando...')),
+          );
         }
-    }), 200
+      }
+    });
+  }
 
+  Future<void> _cargarDatosLocales() async {
+    // Método corregido: getProductosLocales()
+    var datos = await DatabaseService.instance.getProductosLocales();
 
-# ==========================
-# RENOVACIÓN DE TOKEN (REFRESH)
-# ==========================
+    if (datos.isEmpty) {
+      final productosBase = [
+        {
+          'nombre': 'Camiseta TrendVibe',
+          'precio': 25.00,
+          'last_updated_server': DateTime.now().toString().split('.')[0],
+        },
+        {
+          'nombre': 'Jean Slim Fit',
+          'precio': 45.00,
+          'last_updated_server': DateTime.now().toString().split('.')[0],
+        },
+        {
+          'nombre': 'Chaqueta Urbana',
+          'precio': 65.00,
+          'last_updated_server': DateTime.now().toString().split('.')[0],
+        },
+      ];
 
-@app.route("/api/auth/refresh", methods=["POST"])
-@jwt_required(refresh=True)
-def refresh():
-    identity = get_jwt_identity()
-    new_access_token = create_access_token(identity=identity)
-    return jsonify({
-        "access_token": new_access_token
-    }), 200
+      for (var prod in productosBase) {
+        await DatabaseService.instance.insertarProductoLocal(prod);
+      }
 
+      datos = await DatabaseService.instance.getProductosLocales();
+    }
 
-# ==========================
-# CREAR PUBLICACIÓN (PROTEGIDA + VALIDACIÓN 422)
-# ==========================
+    if (mounted) {
+      setState(() {
+        productos = datos;
+      });
+    }
+  }
 
-@app.route("/api/publicaciones", methods=["POST"])
-@jwt_required()
-def crear_publicacion():
-    data = request.get_json() or {}
+  void _mostrarFormularioCrearProducto() {
+    final TextEditingController nombreController = TextEditingController();
+    final TextEditingController precioController = TextEditingController();
+    final GlobalKey<FormState> formKey = GlobalKey<FormState>();
 
-    usuario_id = data.get("usuario_id")
-    titulo = data.get("titulo")
-    contenido = data.get("contenido")
-    client_uuid = data.get("client_uuid")
+    showModalBottomSheet(
+      context: context,
+      isScrollControlled: true,
+      shape: const RoundedRectangleBorder(
+        borderRadius: BorderRadius.vertical(top: Radius.circular(20)),
+      ),
+      builder: (modalContext) {
+        return Padding(
+          padding: EdgeInsets.only(
+            top: 20,
+            left: 20,
+            right: 20,
+            bottom: MediaQuery.of(modalContext).viewInsets.bottom + 20,
+          ),
+          child: Form(
+            key: formKey,
+            child: Column(
+              mainAxisSize: MainAxisSize.min,
+              crossAxisAlignment: CrossAxisAlignment.stretch,
+              children: [
+                Row(
+                  mainAxisAlignment: MainAxisAlignment.spaceBetween,
+                  children: [
+                    const Text(
+                      'Nuevo Producto',
+                      style: TextStyle(fontSize: 20, fontWeight: FontWeight.bold),
+                    ),
+                    IconButton(
+                      icon: const Icon(Icons.close),
+                      onPressed: () => Navigator.of(modalContext).pop(),
+                    ),
+                  ],
+                ),
+                const SizedBox(height: 15),
+                TextFormField(
+                  controller: nombreController,
+                  decoration: InputDecoration(
+                    labelText: 'Nombre del producto',
+                    border: OutlineInputBorder(borderRadius: BorderRadius.circular(12)),
+                    prefixIcon: const Icon(Icons.shopping_bag),
+                  ),
+                  validator: (value) {
+                    if (value == null || value.trim().isEmpty) {
+                      return 'Ingresa el nombre del producto';
+                    }
+                    return null;
+                  },
+                ),
+                const SizedBox(height: 15),
+                TextFormField(
+                  controller: precioController,
+                  keyboardType: const TextInputType.numberWithOptions(decimal: true),
+                  decoration: InputDecoration(
+                    labelText: 'Precio (\$)',
+                    border: OutlineInputBorder(borderRadius: BorderRadius.circular(12)),
+                    prefixIcon: const Icon(Icons.attach_money),
+                  ),
+                  validator: (value) {
+                    if (value == null || value.trim().isEmpty) {
+                      return 'Ingresa el precio';
+                    }
+                    if (double.tryParse(value) == null) {
+                      return 'Ingresa un número válido';
+                    }
+                    return null;
+                  },
+                ),
+                const SizedBox(height: 20),
+                ElevatedButton(
+                  onPressed: () async {
+                    if (formKey.currentState?.validate() ?? false) {
+                      final String nombre = nombreController.text.trim();
+                      final double precio = double.parse(precioController.text.trim());
+                      final clientUuid = const Uuid().v4();
 
-    # Validación 422 de campos para la demostración en video
-    errors = {}
-    if not titulo or str(titulo).strip() == "":
-        errors["titulo"] = "El título de la publicación es obligatorio."
-    if not contenido or str(contenido).strip() == "":
-        errors["contenido"] = "El contenido no puede estar vacío."
+                      final nuevoProducto = {
+                        'nombre': nombre,
+                        'precio': precio,
+                        'last_updated_server': isOffline ? 'Pendiente' : DateTime.now().toString().split('.')[0],
+                      };
 
-    if errors:
-        return jsonify({"message": "Error de validación", "errors": errors}), 422
+                      await DatabaseService.instance.insertarProductoLocal(nuevoProducto);
 
-    conn = get_db_connection()
-    cursor = conn.cursor()
+                      if (isOffline) {
+                        await DatabaseService.instance.addToQueue(
+                          clientUuid,
+                          'http://localhost:5000/api/productos',
+                          '{"nombre": "$nombre", "precio": $precio, "client_uuid": "$clientUuid"}',
+                        );
+                      }
 
-    try:
-        cursor.execute("""
-        INSERT INTO publicaciones(usuario_id, titulo, contenido, client_uuid)
-        VALUES(?,?,?,?)
-        """, (usuario_id, titulo, contenido, client_uuid))
+                      if (mounted) {
+                        Navigator.of(modalContext).pop();
+                        ScaffoldMessenger.of(context).showSnackBar(
+                          SnackBar(
+                            content: Text(
+                              isOffline
+                                  ? 'Guardado en almacén local y cola pendientes'
+                                  : 'Producto guardado en almacén local',
+                            ),
+                          ),
+                        );
+                      }
 
-        conn.commit()
-    except sqlite3.IntegrityError:
-        # Previene duplicados en caso de reintentos con la cola offline
-        conn.close()
-        return jsonify({"mensaje": "La publicación ya existe (idempotencia)"}), 200
-    finally:
-        conn.close()
+                      await _cargarDatosLocales();
+                    }
+                  },
+                  style: ElevatedButton.styleFrom(
+                    backgroundColor: Colors.deepPurple,
+                    foregroundColor: Colors.white,
+                    padding: const EdgeInsets.symmetric(vertical: 14),
+                    shape: RoundedRectangleBorder(
+                      borderRadius: BorderRadius.circular(12),
+                    ),
+                  ),
+                  child: const Text('Guardar Producto', style: TextStyle(fontSize: 16)),
+                ),
+              ],
+            ),
+          ),
+        );
+      },
+    );
+  }
 
-    cache.clear()
+  Future<void> _cerrarSesion() async {
+    await SecureStorageService().clearAll();
+    await DatabaseService.instance.clearAllData();
 
-    return jsonify({
-        "mensaje": "Publicación creada correctamente"
-    }), 201
+    if (!mounted) return;
+    ScaffoldMessenger.of(context).showSnackBar(
+      const SnackBar(content: Text('Sesión cerrada. Almacén local eliminado.')),
+    );
+    await _cargarDatosLocales();
+  }
 
+  @override
+  void dispose() {
+    _connectivitySub.cancel();
+    super.dispose();
+  }
 
-# ==========================
-# LISTAR PUBLICACIONES (PROTEGIDA)
-# ==========================
-
-@app.route("/api/publicaciones", methods=["GET"])
-@jwt_required()
-@cache.cached(timeout=30, query_string=True)
-def listar_publicaciones():
-    pagina = request.args.get("page", 1, type=int)
-    por_pagina = request.args.get("per_page", 5, type=int)
-
-    offset = (pagina - 1) * por_pagina
-
-    conn = get_db_connection()
-
-    publicaciones = conn.execute(
-        """
-        SELECT
-            publicaciones.id,
-            publicaciones.titulo,
-            publicaciones.contenido,
-            publicaciones.fecha_creacion,
-            usuarios.nombre_usuario
-
-        FROM publicaciones
-
-        INNER JOIN usuarios
-        ON publicaciones.usuario_id = usuarios.id
-
-        ORDER BY publicaciones.id DESC
-
-        LIMIT ?
-        OFFSET ?
-        """,
-        (por_pagina, offset)
-    ).fetchall()
-
-    conn.close()
-
-    datos = []
-    for p in publicaciones:
-        datos.append({
-            "id": p["id"],
-            "titulo": p["titulo"],
-            "contenido": p["contenido"],
-            "autor": p["nombre_usuario"],
-            "fecha": p["fecha_creacion"]
-        })
-
-    return jsonify({
-        "pagina": pagina,
-        "por_pagina": por_pagina,
-        "datos": datos
-    })
-
-# ==========================
-# ACTUALIZAR (PROTEGIDA)
-# ==========================
-
-@app.route("/api/publicaciones/<int:id>", methods=["PUT"])
-@jwt_required()
-def actualizar_publicacion(id):
-    data = request.get_json() or {}
-
-    titulo = data.get("titulo")
-    contenido = data.get("contenido")
-
-    if not titulo or not contenido:
-        return jsonify({
-            "errors": {
-                "titulo": "Título obligatorio",
-                "contenido": "Contenido obligatorio"
-            }
-        }), 422
-
-    conn = get_db_connection()
-    cursor = conn.cursor()
-
-    cursor.execute(
-        """
-        UPDATE publicaciones
-        SET titulo=?, contenido=?
-        WHERE id=?
-        """,
-        (titulo, contenido, id)
-    )
-
-    conn.commit()
-
-    if cursor.rowcount == 0:
-        conn.close()
-        return jsonify({
-            "error": "Publicación no encontrada"
-        }), 404
-
-    conn.close()
-    cache.clear()
-
-    return jsonify({
-        "mensaje": "Publicación actualizada correctamente"
-    })
-
-# ==========================
-# ELIMINAR (PROTEGIDA)
-# ==========================
-
-@app.route("/api/publicaciones/<int:id>", methods=["DELETE"])
-@jwt_required()
-def eliminar_publicacion(id):
-    conn = get_db_connection()
-    cursor = conn.cursor()
-
-    cursor.execute(
-        "DELETE FROM publicaciones WHERE id=?",
-        (id,)
-    )
-
-    conn.commit()
-
-    if cursor.rowcount == 0:
-        conn.close()
-        return jsonify({
-            "error": "Publicación no encontrada"
-        }), 404
-
-    conn.close()
-    cache.clear()
-
-    return jsonify({
-        "mensaje": "Publicación eliminada correctamente"
-    })
-
-
-# ==========================
-# EJECUCIÓN
-# ==========================
-
-if __name__ == "__main__":
-    app.run(host="0.0.0.0", port=5000, debug=True)
+  @override
+  Widget build(BuildContext context) {
+    return Scaffold(
+      appBar: AppBar(
+        title: Text('Bienvenido, ${widget.nombreUsuario.toUpperCase()}'),
+        actions: [
+          IconButton(
+            icon: const Icon(Icons.logout),
+            onPressed: _cerrarSesion,
+          ),
+        ],
+      ),
+      body: Column(
+        children: [
+          if (isOffline)
+            Container(
+              color: Colors.orange.shade900,
+              padding: const EdgeInsets.all(10),
+              width: double.infinity,
+              child: const Row(
+                children: [
+                  Icon(Icons.wifi_off, color: Colors.white),
+                  SizedBox(width: 10),
+                  Expanded(
+                    child: Text(
+                      'Modo sin conexión - Datos locales desactualizados',
+                      style: TextStyle(color: Colors.white, fontWeight: FontWeight.bold),
+                    ),
+                  ),
+                ],
+              ),
+            ),
+          Expanded(
+            child: productos.isEmpty
+                ? const Center(child: Text('No hay datos en el almacén local.'))
+                : ListView.builder(
+                    itemCount: productos.length,
+                    itemBuilder: (context, index) {
+                      final p = productos[index];
+                      return ListTile(
+                        leading: const CircleAvatar(
+                          child: Icon(Icons.shopping_bag),
+                        ),
+                        title: Text(p['nombre'] ?? 'Sin Nombre'),
+                        subtitle: Text('Sincronizado: ${p['last_updated_server'] ?? 'N/A'}'),
+                        trailing: Text('\$${p['precio']}'),
+                      );
+                    },
+                  ),
+          ),
+        ],
+      ),
+      floatingActionButton: FloatingActionButton(
+        onPressed: _mostrarFormularioCrearProducto,
+        child: const Icon(Icons.add),
+      ),
+    );
+  }
+}
